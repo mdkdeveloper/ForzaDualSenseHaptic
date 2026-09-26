@@ -1,0 +1,201 @@
+// ForzaHaptics settings. The file is reloaded automatically after saving,
+// so values can be adjusted while playing. Gain = effect strength (0 disables it).
+{
+  // UDP port; enter the same value in FH6: Settings → HUD and Gameplay → Data Out IP Port
+  "Port": 5310,
+  // Forward packets to other applications, e.g. ["127.0.0.1:5300"] (only one application can listen on a UDP port)
+  "ForwardTo": [],
+
+  // auto | usb | bt   (auto: try USB audio first, then Bluetooth)
+  "Output": "auto",
+  "UsbLatencyMs": 20,
+  // Zero-based haptic channels on the DualSense USB audio device: third and fourth
+  "UsbHapticChannels": [ 2, 3 ],
+
+  "MasterGain": 1.0,
+  "SwapLeftRight": false,
+  // Output frequency band. DualSense actuators are voice coils: below ~60 Hz they are barely
+  // perceptible, strongest around ~100–250 Hz (check with the --test frequency sweep), and whine above 350 Hz
+  "LowCutHz": 45,
+  "HighCutHz": 350,
+
+  // Output compressor: raises quiet textures without letting impacts clip abruptly.
+  // Makeup is the overall gain after compression (adjust it or MasterGain for stronger/weaker feedback).
+  "Dynamics": {
+    "Enabled": true,
+    "Threshold": 0.25,
+    "Ratio": 3,
+    "Makeup": 3.0,
+    "AttackMs": 3,
+    "ReleaseMs": 150
+  },
+
+  // Road texture: the game's SurfaceRumble plus base roughness, increasing with speed
+  "Road": {
+    "Enabled": true,
+    "Gain": 0.55,
+    "AsphaltBase": 0.12,
+    "SurfaceScale": 1.5,
+    "MinFreqHz": 70,
+    "MaxFreqHz": 190,
+    "FullSpeedKmh": 160
+  },
+
+  // Rumble strips: rhythm = speed / spacing, with CarrierHz as the carrier
+  "RumbleStrip": {
+    "Enabled": true,
+    "Gain": 0.5,
+    "SpacingMeters": 0.45,
+    "MinFreqHz": 12,
+    "MaxFreqHz": 110,
+    "CarrierHz": 160
+  },
+
+  // Suspension impacts (potholes, joints, landings): based on suspension travel speed in m/s
+  "Suspension": {
+    "Enabled": true,
+    "Gain": 0.8,
+    "ThresholdMps": 0.3,
+    "FullMps": 2.5,
+    "FreqHz": 85,
+    "DecayMs": 70
+  },
+
+  // Loss of grip (TireCombinedSlip > 1)
+  "Slip": {
+    "Enabled": true,
+    "Gain": 0.45,
+    "Start": 0.9,
+    "Full": 2.5,
+    "FreqHz": 120
+  },
+
+  // Wheelspin under throttle (TireSlipRatio)
+  "Wheelspin": {
+    "Enabled": true,
+    "Gain": 0.3,
+    "Start": 1.0,
+    "Full": 3.0,
+    "FreqHz": 150
+  },
+
+  // Wheel lockup under braking, pulsing like ABS
+  "Lockup": {
+    "Enabled": true,
+    "Gain": 0.5,
+    "Start": 0.9,
+    "Full": 1.5,
+    "PulseHz": 14,
+    "CarrierHz": 150
+  },
+
+  // Engine: frequency follows RPM; kept quiet so it does not overpower road feedback
+  "Engine": {
+    "Enabled": true,
+    "Gain": 0.1,
+    "MinFreqHz": 55,
+    "MaxFreqHz": 190,
+    "LimiterThreshold": 0.97,
+    "LimiterGain": 0.2,
+    "LimiterHz": 15
+  },
+
+  "GearShift": {
+    "Enabled": true,
+    "Gain": 0.55,
+    "FreqHz": 110,
+    "DecayMs": 45
+  },
+
+  // Collisions: horizontal acceleration (g) + SmashableVelDiff
+  "Impact": {
+    "Enabled": true,
+    "Gain": 1.0,
+    "StartG": 3.5,
+    "FullG": 15,
+    "FreqHz": 75,
+    "NoiseFreqHz": 170,
+    "SmashFreqHz": 90,
+    "DecayMs": 140,
+    "SmashableFullVel": 10
+  },
+
+  // Puddles: viscous noise plus a splash on entry
+  "Water": {
+    "Enabled": true,
+    "Gain": 0.35,
+    "SplashGain": 0.6,
+    "FreqHz": 75,
+    "SplashFreqHz": 140
+  },
+
+  // ---------- L2/R2 adaptive triggers (logic based on HorizonHaptics) ----------
+  // Mode: Off — free trigger | Resistance — resistance only | Vibration — resistance plus vibration when grip is lost
+  // Resistance and HandbrakeStrength use a 0..8 scale; vibration frequencies/amplitudes use 0..255.
+  // If the triggers do not work, disable trigger effects in Steam Input / DS4Windows / DSX.
+  "Triggers": {
+    "Enabled": true,
+    // Overall strength of all trigger effects (0..1): 0.65 = 35% weaker than the original HorizonHaptics values.
+    // Lower values feel softer and reduce wear on the trigger mechanism.
+    "Strength": 0.65,
+
+    // Hysteresis: entry and exit thresholds differ, so the previous state is held within the range
+    // and the trigger does not chatter at boundaries (resistance ↔ ABS, level 2 ↔ 3). Enabled: false restores the old behavior.
+    "Hysteresis": {
+      "Enabled": true,
+      "SlipBand": 0.2,        // exit ABS/wheelspin when slip < GripLoss × (1 − 0.2)
+      "PedalBand": 20,        // pedal (0..255): exit 20 below the entry threshold
+      "LevelDeadband": 0.35,  // resistance changes only when the value moves by 0.5 + 0.35
+      "VibDeadband": 3,       // vibration frequency/amplitude update when the change is ≥ 3
+      "HoldMs": 150           // minimum time between mode transitions
+    },
+
+    // R2 (throttle): resistance grows with acceleration; wheelspin causes vibration
+    "Throttle": {
+      "Mode": "Vibration",
+      "Intensity": 0.7,
+      "GripLoss": 0.6,            // average TireCombinedSlip at which grip is considered lost
+      "TurnAccelScale": 0.25,     // lateral-acceleration contribution to resistance
+      "FwdAccelScale": 1.0,       // longitudinal-acceleration contribution
+      "AccelLimit": 10,           // m/s² at which resistance reaches its maximum
+      "VibModeStart": 5,          // throttle (0..255) must exceed this value to enable vibration
+      "VibFreqMin": 30,           // vibration frequency (Hz) at the slip threshold; below ~25 it feels like tapping
+      "MaxVibration": 60,         // ...and during heavy slip
+      "VibSmoothing": 1.0,        // 1 = no smoothing; lower values are smoother
+      "VibAmpMin": 45,            // vibration strength (0..255) at the slip threshold
+      "VibAmpMax": 110,           // ...and during heavy slip
+      "VibAttackMs": 200,         // time in ms for vibration to ramp up smoothly
+      "MinResistance": 0,
+      "MaxResistance": 3,
+      "ResistanceSmoothing": 0.9,
+      "BoostResistance": 0.25     // additional resistance while boost is active
+    },
+
+    // L2 (brake): progressive resistance; handbrake forms a hard wall; ABS keeps upper zones firm while lower zones pulse
+    "Brake": {
+      "Mode": "Vibration",
+      "Intensity": 0.7,
+      "GripLoss": 0.05,
+      "MinResistance": 0,
+      "MaxResistance": 7,
+      "ResistanceSmoothing": 0.4,
+      "HandbrakeStrength": 8,
+      "AbsWallZones": 3,          // number of upper zones (1..9) that remain firm during ABS
+      "AbsWallStrength": 5,       // strength of the firm upper zones during ABS (1..8)
+      "AbsAmpMax": 4,             // lower-zone pulse strength during heavy slip (1..8)
+      "MinVibration": 20,         // ABS frequency during light slip
+      "MaxVibration": 40,         // ...and during heavy slip
+      "VibSmoothing": 0.8,
+      "VibAttackMs": 150          // time for ABS pulses to ramp up smoothly
+    },
+
+    // Short trigger pulse during a gear shift
+    "GearShift": { "Throttle": true, "Brake": true, "Freq": 20, "Amp": 100, "DurationMs": 60 },
+
+    // Released trigger: road texture (FH6 vibration must be enabled) and rumble strips
+    "Surface": { "Throttle": true, "Brake": true, "Freq": 10, "Amp": 10, "StripFreq": 25, "StripAmp": 150 },
+
+    // Jolt on both triggers when striking an object (SmashableVelDiff, m/s)
+    "Collision": { "Enabled": true, "ThresholdMps": 3, "Freq": 40, "Amp": 255, "DurationMs": 150 }
+  }
+}

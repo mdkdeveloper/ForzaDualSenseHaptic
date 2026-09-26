@@ -1,0 +1,119 @@
+<UserControl x:Class="ForzaHaptics.Gui.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel"
+             xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ForzaHaptics.Gui.ViewModels">
+    <UserControl.Styles>
+        <Style Selector="TextBox.invalid">
+            <Setter Property="Background" Value="{StaticResource AppErrorSurfaceBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AppErrorBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+    </UserControl.Styles>
+
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="{x:Type vm:BoolSettingFieldViewModel}" x:DataType="vm:BoolSettingFieldViewModel">
+            <CheckBox Content="{Binding DisplayLabel}"
+                      IsChecked="{Binding Value, Mode=TwoWay}"
+                      IsEnabled="{Binding IsEnabled}"
+                      MinHeight="36"
+                      Margin="0,6"
+                      ToolTip.Tip="{Binding DisplayTip}" />
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type vm:ChoiceSettingFieldViewModel}" x:DataType="vm:ChoiceSettingFieldViewModel">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="200,*" Margin="0,6"
+                  ToolTip.Tip="{Binding DisplayTip}" IsEnabled="{Binding IsEnabled}">
+                <TextBlock Text="{Binding DisplayLabel}" VerticalAlignment="Center"
+                           Margin="0,0,16,0" Classes="fieldLabel" />
+                <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding SelectedValue, Mode=TwoWay}"
+                          MinWidth="180" HorizontalAlignment="Left" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ErrorMessage}"
+                           IsVisible="{Binding HasError}" Margin="0,4,0,0" Classes="errorText" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type vm:SliderSettingFieldViewModel}" x:DataType="vm:SliderSettingFieldViewModel">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="200,*,72" Margin="0,6"
+                  ToolTip.Tip="{Binding DisplayTip}" IsEnabled="{Binding IsEnabled}">
+                <TextBlock Text="{Binding DisplayLabel}" VerticalAlignment="Center"
+                           Margin="0,0,16,0" Classes="fieldLabel" />
+                <Slider Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}"
+                        SmallChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                        Value="{Binding Value, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <TextBox Grid.Column="2" Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         TextAlignment="Right" VerticalContentAlignment="Center"
+                         Classes.invalid="{Binding HasError}"
+                         LostFocus="OnCommitText" KeyDown="OnTextBoxKeyDown" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding ErrorMessage}"
+                           IsVisible="{Binding HasError}" Margin="0,4,0,0" Classes="errorText" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type vm:TextSettingFieldViewModel}" x:DataType="vm:TextSettingFieldViewModel">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="200,*" Margin="0,6"
+                  ToolTip.Tip="{Binding DisplayTip}" IsEnabled="{Binding IsEnabled}">
+                <TextBlock Text="{Binding DisplayLabel}" VerticalAlignment="Center"
+                           Margin="0,0,16,0" Classes="fieldLabel" />
+                <TextBox Grid.Column="1" Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         VerticalContentAlignment="Center" MaxWidth="220" MinWidth="120" HorizontalAlignment="Left"
+                         Classes.invalid="{Binding HasError}"
+                         LostFocus="OnCommitText" KeyDown="OnTextBoxKeyDown" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ErrorMessage}"
+                           IsVisible="{Binding HasError}" Margin="0,4,0,0" Classes="errorText" />
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate DataType="{x:Type vm:ListSettingFieldViewModel}" x:DataType="vm:ListSettingFieldViewModel">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="200,*" Margin="0,6"
+                  ToolTip.Tip="{Binding DisplayTip}" IsEnabled="{Binding IsEnabled}">
+                <TextBlock Text="{Binding DisplayLabel}" VerticalAlignment="Center"
+                           Margin="0,0,16,0" Classes="fieldLabel" />
+                <TextBox Grid.Column="1" Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         VerticalContentAlignment="Center" Classes.invalid="{Binding HasError}"
+                         LostFocus="OnCommitText" KeyDown="OnTextBoxKeyDown" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ErrorMessage}"
+                           IsVisible="{Binding HasError}" Margin="0,4,0,0" Classes="errorText" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
+    <TabControl x:Name="SettingsNavigation"
+                ItemsSource="{Binding Tabs}"
+                TabStripPlacement="Left"
+                Classes="settingsNavigation"
+                Background="{StaticResource AppBackgroundBrush}">
+        <TabControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:SettingsTabViewModel">
+                <TextBlock Text="{Binding Title}" />
+            </DataTemplate>
+        </TabControl.ItemTemplate>
+        <TabControl.ContentTemplate>
+            <DataTemplate x:DataType="vm:SettingsTabViewModel">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Background="{StaticResource AppBackgroundBrush}" Padding="20,16">
+                    <ItemsControl ItemsSource="{Binding Groups}"
+                                  MaxWidth="900"
+                                  HorizontalAlignment="Stretch">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SettingsGroupViewModel">
+                                <GroupBox Classes="settingsCard"
+                                          MaxWidth="900"
+                                          HorizontalAlignment="Stretch"
+                                          Margin="0,0,0,16"
+                                          Padding="16,12,16,16"
+                                          ToolTip.Tip="{Binding Tip}">
+                                    <GroupBox.Header>
+                                        <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" />
+                                    </GroupBox.Header>
+                                    <ItemsControl ItemsSource="{Binding Fields}" />
+                                </GroupBox>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DataTemplate>
+        </TabControl.ContentTemplate>
+    </TabControl>
+</UserControl>

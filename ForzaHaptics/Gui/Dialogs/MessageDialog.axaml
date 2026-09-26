@@ -1,0 +1,15 @@
+<Window x:Class="ForzaHaptics.Gui.Dialogs.MessageDialog"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="460" SizeToContent="Height" CanResize="False"
+        Background="{StaticResource AppSurfaceBrush}"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <StackPanel Margin="18" Spacing="16">
+        <TextBlock x:Name="MessageText" TextWrapping="Wrap" MaxWidth="540" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+            <Button x:Name="PrimaryButton" MinWidth="90" Classes="primaryAction" Click="OnPrimary" />
+            <Button x:Name="SecondaryButton" MinWidth="90" Click="OnSecondary" />
+            <Button x:Name="CancelButton" MinWidth="90" Click="OnCancel" />
+        </StackPanel>
+    </StackPanel>
+</Window>

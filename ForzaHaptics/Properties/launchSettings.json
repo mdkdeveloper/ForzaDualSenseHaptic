@@ -1,0 +1,38 @@
+{
+  "profiles": {
+    "Window (GUI)": {
+      "commandName": "Project",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "Game without window (console)": {
+      "commandName": "Project",
+      "commandLineArgs": "--console",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "Driving simulator": {
+      "commandName": "Project",
+      "commandLineArgs": "--simulate",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "Motor test": {
+      "commandName": "Project",
+      "commandLineArgs": "--test",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "List devices": {
+      "commandName": "Project",
+      "commandLineArgs": "--list",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "Game + telemetry recording": {
+      "commandName": "Project",
+      "commandLineArgs": "--record session.fhrec",
+      "workingDirectory": "$(ProjectDir)"
+    },
+    "Render simulator to WAV": {
+      "commandName": "Project",
+      "commandLineArgs": "--render simulator.wav",
+      "workingDirectory": "$(ProjectDir)"
+    }
+  }
+}

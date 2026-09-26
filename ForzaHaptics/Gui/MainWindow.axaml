@@ -1,0 +1,131 @@
+<Window x:Class="ForzaHaptics.Gui.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ForzaHaptics.Gui.ViewModels"
+        xmlns:views="using:ForzaHaptics.Gui.Views"
+        Title="{Binding Title}"
+        Width="1120" Height="820" MinWidth="760" MinHeight="560"
+        Background="{StaticResource AppBackgroundBrush}"
+        WindowStartupLocation="CenterScreen">
+    <Window.Styles>
+        <Style Selector="Border.statusBadge">
+            <Setter Property="Background" Value="{StaticResource AppInputBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AppBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="10,4" />
+        </Style>
+        <Style Selector="Border.statusBadge.running">
+            <Setter Property="Background" Value="#1D3529" />
+            <Setter Property="BorderBrush" Value="{StaticResource AppSuccessBrush}" />
+        </Style>
+        <Style Selector="Border.statusBadge.busy">
+            <Setter Property="Background" Value="#3B321F" />
+            <Setter Property="BorderBrush" Value="{StaticResource AppWarningBrush}" />
+        </Style>
+        <Style Selector="Expander.activityLog">
+            <Setter Property="Background" Value="{StaticResource AppLogBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AppBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+    </Window.Styles>
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveCommand}" />
+    </Window.KeyBindings>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <Border Grid.Row="0" Background="{StaticResource AppSurfaceBrush}"
+                BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,0,0,1" Padding="14,10">
+            <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,220,*,Auto,Auto">
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile" VerticalAlignment="Center"
+                           Margin="0,0,10,0" FontWeight="SemiBold" />
+                <ComboBox x:Name="ProfileSelector" Grid.Row="0" Grid.Column="1"
+                          ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile, Mode=TwoWay}"
+                          ToolTip.Tip="Choose the active settings profile" />
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="Unsaved changes" IsVisible="{Binding IsDirty}"
+                           VerticalAlignment="Center" HorizontalAlignment="Right" Margin="12,0"
+                           Foreground="{StaticResource AppWarningBrush}" FontWeight="SemiBold" />
+                <Button x:Name="RevertButton" Grid.Row="0" Grid.Column="3" Content="Revert" Margin="0,0,8,0"
+                        Command="{Binding RevertCommand}" IsEnabled="{Binding IsDirty}"
+                        ToolTip.Tip="Restore the saved profile values" />
+                <Button x:Name="SaveButton" Grid.Row="0" Grid.Column="4" Content="Save" MinWidth="84"
+                        Command="{Binding SaveCommand}" IsEnabled="{Binding IsDirty}" Classes="primaryAction"
+                        ToolTip.Tip="Write changes to the profile file (Ctrl+S)" />
+
+                <WrapPanel Grid.Row="1" Grid.ColumnSpan="5" Orientation="Horizontal" Margin="0,9,0,0">
+                    <TextBlock Text="Profile actions" VerticalAlignment="Center" Margin="0,0,12,0" Classes="secondary" />
+                    <Button Content="⟳ Refresh" Margin="0,0,6,0" Command="{Binding RefreshProfilesCommand}"
+                            ToolTip.Tip="Rescan the Configs folder for profile files" />
+                    <Button Content="New" Margin="0,0,6,0" Command="{Binding NewProfileCommand}"
+                            ToolTip.Tip="Create a profile with default settings" />
+                    <Button Content="Duplicate" Margin="0,0,6,0" Command="{Binding DuplicateProfileCommand}"
+                            ToolTip.Tip="Copy the current profile" />
+                    <Button Content="Rename" Margin="0,0,6,0" Command="{Binding RenameProfileCommand}" />
+                    <Button Content="Delete" Margin="0,0,6,0" Command="{Binding DeleteProfileCommand}"
+                            IsEnabled="{Binding CanDeleteProfile}" ToolTip.Tip="Move the profile file to the Recycle Bin" />
+                    <Button Content="Open folder…" Command="{Binding OpenProfilesFolderCommand}"
+                            ToolTip.Tip="Open the Configs folder in File Explorer" />
+                </WrapPanel>
+            </Grid>
+        </Border>
+
+        <views:SettingsView Grid.Row="1" DataContext="{Binding Settings}" />
+
+        <Border x:Name="RuntimePanel" Grid.Row="2" Background="{StaticResource AppSurfaceBrush}"
+                BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+                <WrapPanel Grid.Row="0" Orientation="Horizontal">
+                        <Button x:Name="StartStopButton" Content="{Binding StartStopText}"
+                                Command="{Binding StartStopCommand}" IsEnabled="{Binding ControlsEnabled}"
+                                MinWidth="88" Margin="0,0,6,0"
+                                Classes.primaryAction="{Binding IsEngineStopped}"
+                                Classes.destructiveAction="{Binding IsEngineRunning}" />
+                        <ToggleButton Content="Simulation" IsChecked="{Binding IsSimulationEnabled, Mode=TwoWay}"
+                                      Command="{Binding ApplyModesCommand}" IsEnabled="{Binding ControlsEnabled}"
+                                      Margin="0,0,6,0"
+                                      ToolTip.Tip="Use a synthetic drive instead of the game to test without FH6" />
+                        <ToggleButton Content="Motor test" IsChecked="{Binding IsTestEnabled, Mode=TwoWay}"
+                                      Command="{Binding ApplyModesCommand}" IsEnabled="{Binding ControlsEnabled}"
+                                      Margin="0,0,6,0"
+                                      ToolTip.Tip="Left → right → 20–400 Hz sweep → impulses" />
+                        <Button Content="{Binding RestartText}" Command="{Binding RestartOutputCommand}"
+                                IsEnabled="{Binding ControlsEnabled}" Classes.pending="{Binding RestartPending}"
+                                ToolTip.Tip="Apply the port, output, channels, and trigger settings marked with ⟳" />
+                </WrapPanel>
+
+                <Grid Grid.Row="1" ColumnDefinitions="Auto,*" Margin="0,8,0,0">
+                    <Border Grid.Column="0" Classes="statusBadge" Classes.running="{Binding IsEngineRunning}"
+                            Classes.busy="{Binding IsBusy}" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding EngineStateText}" FontWeight="SemiBold" />
+                    </Border>
+                    <TextBlock Grid.Column="1" Text="{Binding StatusText}" VerticalAlignment="Center"
+                               Margin="10,0,0,0" TextTrimming="CharacterEllipsis" Classes="secondary" />
+                </Grid>
+
+                <Grid Grid.Row="2" Margin="0,8" ColumnDefinitions="Auto,160,Auto,160,*">
+                    <TextBlock Grid.Column="0" Text="L" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold" />
+                    <ProgressBar Grid.Column="1" Value="{Binding LeftMeter}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="R" VerticalAlignment="Center" Margin="14,0,8,0" FontWeight="SemiBold" />
+                    <ProgressBar Grid.Column="3" Value="{Binding RightMeter}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="4" Text="{Binding DeviceText}" VerticalAlignment="Center" Margin="14,0,0,0"
+                               TextTrimming="CharacterEllipsis" Classes="secondary" />
+                </Grid>
+
+                <Expander x:Name="ActivityLogExpander" Grid.Row="3" Header="Activity log"
+                          IsExpanded="False" Classes="activityLog" Expanded="OnLogExpanded">
+                    <ListBox x:Name="LogList" Height="140" ItemsSource="{Binding LogEntries}"
+                             FontFamily="Consolas" FontSize="12" Background="{StaticResource AppLogBrush}"
+                             BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:LogEntryViewModel">
+                                <TextBlock Text="{Binding Text}" Foreground="{Binding Color}"
+                                           TextWrapping="Wrap" Margin="4,2" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Expander>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

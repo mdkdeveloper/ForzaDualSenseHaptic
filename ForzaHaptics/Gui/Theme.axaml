@@ -1,0 +1,145 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0F1117" />
+        <SolidColorBrush x:Key="AppSurfaceBrush" Color="#171B23" />
+        <SolidColorBrush x:Key="AppCardBrush" Color="#1E2430" />
+        <SolidColorBrush x:Key="AppInputBrush" Color="#222936" />
+        <SolidColorBrush x:Key="AppControlHoverBrush" Color="#2B3442" />
+        <SolidColorBrush x:Key="AppControlPressedBrush" Color="#202733" />
+        <SolidColorBrush x:Key="AppSelectedBrush" Color="#263248" />
+        <SolidColorBrush x:Key="AppBorderBrush" Color="#343D4D" />
+        <SolidColorBrush x:Key="AppControlBorderBrush" Color="#687386" />
+        <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#F4F7FB" />
+        <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#AAB4C3" />
+        <SolidColorBrush x:Key="AppTextDisabledBrush" Color="#717C89" />
+        <SolidColorBrush x:Key="AppAccentBrush" Color="#4C8DFF" />
+        <SolidColorBrush x:Key="AppAccentHoverBrush" Color="#6EA4FF" />
+        <SolidColorBrush x:Key="AppAccentPressedBrush" Color="#3D78DC" />
+        <SolidColorBrush x:Key="AppFocusBrush" Color="#80B0FF" />
+        <SolidColorBrush x:Key="AppErrorSurfaceBrush" Color="#3A2028" />
+        <SolidColorBrush x:Key="AppErrorBrush" Color="#FF6B7A" />
+        <SolidColorBrush x:Key="AppDangerPressedBrush" Color="#D94F60" />
+        <SolidColorBrush x:Key="AppLogBrush" Color="#0B0E13" />
+        <SolidColorBrush x:Key="AppSuccessBrush" Color="#63D98B" />
+        <SolidColorBrush x:Key="AppWarningBrush" Color="#FFBE6A" />
+    </Styles.Resources>
+
+    <Style Selector=":is(Window)">
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Background" Value="{StaticResource AppBackgroundBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+    </Style>
+    <Style Selector="Button">
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="MinWidth" Value="32" />
+    </Style>
+    <Style Selector="ToggleButton">
+        <Setter Property="Padding" Value="12,6" />
+        <Setter Property="MinHeight" Value="36" />
+    </Style>
+    <Style Selector="Button.primaryAction">
+        <Setter Property="Background" Value="{StaticResource AppAccentBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppAccentBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.primaryAction:pointerover">
+        <Setter Property="Background" Value="{StaticResource AppAccentHoverBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppAccentHoverBrush}" />
+    </Style>
+    <Style Selector="Button.primaryAction:pressed">
+        <Setter Property="Background" Value="{StaticResource AppAccentPressedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppFocusBrush}" />
+    </Style>
+    <Style Selector="Button.destructiveAction">
+        <Setter Property="Background" Value="{StaticResource AppErrorBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppBackgroundBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppErrorBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.destructiveAction:pointerover">
+        <Setter Property="Background" Value="#FF8995" />
+        <Setter Property="BorderBrush" Value="#FF8995" />
+    </Style>
+    <Style Selector="Button.destructiveAction:pressed">
+        <Setter Property="Background" Value="{StaticResource AppDangerPressedBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppDangerPressedBrush}" />
+    </Style>
+    <Style Selector="Button.pending">
+        <Setter Property="Foreground" Value="{StaticResource AppWarningBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppWarningBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button:disabled, ToggleButton:disabled, TextBox:disabled, ComboBox:disabled, CheckBox:disabled">
+        <Setter Property="Foreground" Value="{StaticResource AppTextDisabledBrush}" />
+        <Setter Property="Opacity" Value="0.72" />
+    </Style>
+    <Style Selector="Button:focus-visible, ToggleButton:focus-visible, TextBox:focus-visible, ComboBox:focus-visible, CheckBox:focus-visible">
+        <Setter Property="BorderBrush" Value="{StaticResource AppFocusBrush}" />
+    </Style>
+    <Style Selector="GroupBox.settingsCard">
+        <Setter Property="Background" Value="{StaticResource AppCardBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppControlBorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TabControl.settingsNavigation > TabItem">
+        <Setter Property="Width" Value="168" />
+        <Setter Property="MinHeight" Value="44" />
+        <Setter Property="Padding" Value="16,10" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextSecondaryBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="TabControl.settingsNavigation > TabItem:pointerover">
+        <Setter Property="Background" Value="{StaticResource AppControlHoverBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+    </Style>
+    <Style Selector="TabControl.settingsNavigation > TabItem:selected">
+        <Setter Property="Background" Value="{StaticResource AppSelectedBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.secondary">
+        <Setter Property="Foreground" Value="{StaticResource AppTextSecondaryBrush}" />
+    </Style>
+    <Style Selector="TextBlock.fieldLabel">
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBlock.errorText">
+        <Setter Property="Foreground" Value="{StaticResource AppErrorBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+    <Style Selector="TextBox">
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Background" Value="{StaticResource AppInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppControlBorderBrush}" />
+    </Style>
+    <Style Selector="ComboBox">
+        <Setter Property="MinHeight" Value="36" />
+        <Setter Property="Background" Value="{StaticResource AppInputBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppControlBorderBrush}" />
+    </Style>
+    <Style Selector="ProgressBar">
+        <Setter Property="Height" Value="10" />
+        <Setter Property="Minimum" Value="0" />
+        <Setter Property="Maximum" Value="1" />
+        <Setter Property="Foreground" Value="{StaticResource AppAccentBrush}" />
+    </Style>
+    <Style Selector="ToolTip">
+        <Setter Property="MaxWidth" Value="420" />
+        <Setter Property="Background" Value="{StaticResource AppCardBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource AppTextPrimaryBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource AppBorderBrush}" />
+    </Style>
+</Styles>
