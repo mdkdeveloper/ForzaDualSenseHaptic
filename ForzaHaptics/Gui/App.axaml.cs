@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
+using ForzaHaptics.Controllers;
 using ForzaHaptics.Gui.Dialogs;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Gui.ViewModels;
@@ -54,13 +55,17 @@ public sealed class App : Application
             MainWindow? window = null;
             var dialogs = new AvaloniaUserDialogService(() => window);
             var engine = new HapticEngineFacade(() => session.Current);
+            var controller = new ControllerService(
+                () => session.Current.Output,
+                () => engine.IsRunning ? engine.ActiveControllerDeviceId : null);
             var viewModel = new MainWindowViewModel(
                 session,
                 engine,
                 dialogs,
                 new WindowsPlatformShellService(),
                 new AvaloniaUiDispatcher(),
-                earlyLog);
+                earlyLog,
+                controller);
             window = new MainWindow(viewModel);
             desktop.MainWindow = window;
         }

@@ -9,7 +9,12 @@ namespace ForzaHaptics.Tests;
 
 public static class TestAppBuilder
 {
-    public static AppBuilder BuildAvaloniaApp() => AppBuilder
-        .Configure<App>()
-        .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+    public static AppBuilder BuildAvaloniaApp()
+    {
+        bool renderScreenshots = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("FORZAHAPTICS_SCREENSHOT_DIR"));
+        var builder = AppBuilder.Configure<App>();
+        if (renderScreenshots)
+            builder.UseSkia();
+        return builder.UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = !renderScreenshots });
+    }
 }

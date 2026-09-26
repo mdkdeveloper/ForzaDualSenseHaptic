@@ -4,6 +4,7 @@ namespace ForzaHaptics.Gui.Services;
 public interface IHapticEngineFacade : IDisposable
 {
     bool IsRunning { get; }
+    string? ActiveControllerDeviceId => null;
     string OutputDescription { get; }
     string TriggersDescription { get; }
     bool HasTriggers { get; }
@@ -32,6 +33,7 @@ public sealed class HapticEngineFacade : IHapticEngineFacade
     }
 
     public bool IsRunning => _engine.IsRunning;
+    public string? ActiveControllerDeviceId => _engine.ActiveControllerDeviceId;
     public string OutputDescription => _engine.OutputDescription;
     public string TriggersDescription => _engine.TriggersDescription;
     public bool HasTriggers => _engine.HasTriggers;

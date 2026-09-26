@@ -128,7 +128,21 @@ public sealed class AvaloniaSmokeTests
 
             try
             {
-                AssertHorizontallyInside(mainWindow, NamedControl<ComboBox>(mainWindow, "ProfileSelector"));
+                var controllerPanel = NamedControl<Control>(mainWindow, "ControllerPanel");
+                var battery = NamedControl<Control>(mainWindow, "ControllerBattery");
+                var disconnect = NamedControl<Button>(mainWindow, "DisconnectControllerButton");
+                var profileSelector = NamedControl<ComboBox>(mainWindow, "ProfileSelector");
+                AssertHorizontallyInside(mainWindow, controllerPanel);
+                AssertHorizontallyInside(mainWindow, battery);
+                AssertHorizontallyInside(mainWindow, disconnect);
+                AssertHorizontallyInside(mainWindow, profileSelector);
+                var panelOrigin = controllerPanel.TranslatePoint(default, mainWindow)!.Value;
+                var profileOrigin = profileSelector.TranslatePoint(default, mainWindow)!.Value;
+                Assert.True(panelOrigin.Y >= 0);
+                Assert.True(panelOrigin.Y + controllerPanel.Bounds.Height <= profileOrigin.Y + 0.5,
+                    "Controller status must remain above the profile controls.");
+                Assert.True(battery.Bounds.Height > 0);
+                Assert.True(disconnect.Bounds.Height > 0);
                 AssertHorizontallyInside(mainWindow, NamedControl<Button>(mainWindow, "RevertButton"));
                 AssertHorizontallyInside(mainWindow, NamedControl<Button>(mainWindow, "SaveButton"));
                 AssertHorizontallyInside(mainWindow, NamedControl<Button>(mainWindow, "StartStopButton"));

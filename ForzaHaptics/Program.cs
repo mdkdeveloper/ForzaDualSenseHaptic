@@ -226,20 +226,44 @@ internal static class LiveRun
 
 internal static class OutputFactory
 {
-    public static IHapticOutput? Create(string mode, AppConfig cfg, Func<int, IHapticSource> factory)
+    public static IHapticOutput? Create(string mode, AppConfig cfg, Func<int, IHapticSource> factory, out string? activeDeviceId, string? controllerDeviceId = null)
     {
+        activeDeviceId = null;
         if (mode is not ("auto" or "usb" or "bt"))
         {
             Log.Error($"Unknown output mode '{mode}' (auto | usb | bt)");
             return null;
         }
 
+        var hid = DualSenseHid.Find().OrderBy(h => h.Device.DevicePath, StringComparer.Ordinal).ToList();
+        var selected = controllerDeviceId == null ? null : hid.FirstOrDefault(h => h.Device.DevicePath == controllerDeviceId);
+        if (controllerDeviceId != null)
+        {
+            if (selected == null)
+            {
+                Log.Error("The selected controller is no longer connected.");
+                return null;
+            }
+            if ((mode == "usb" && selected.IsBluetooth) || (mode == "bt" && !selected.IsBluetooth))
+            {
+                Log.Error("The selected controller does not match the requested output mode. Wait for controller status to refresh.");
+                return null;
+            }
+            mode = selected.IsBluetooth ? "bt" : "usb";
+        }
+
         if (mode is "auto" or "usb")
         {
+            var usbControllers = hid.Where(h => !h.IsBluetooth).ToList();
+            if (usbControllers.Count > 1)
+            {
+                Log.Error("Connect only one USB DualSense to ensure audio and controller status refer to the same device.");
+                return null;
+            }
             MMDevice? device = null;
             try
             {
-                device = UsbAudioOutput.FindDualSenseEndpoint();
+                if (usbControllers.Count == 1) device = UsbAudioOutput.FindDualSenseEndpoint();
             }
             catch (Exception ex)
             {
@@ -250,7 +274,9 @@ internal static class OutputFactory
             {
                 try
                 {
-                    return new UsbAudioOutput(device, cfg.UsbLatencyMs, cfg.UsbHapticChannels[0], cfg.UsbHapticChannels[1], factory);
+                    var output = new UsbAudioOutput(device, cfg.UsbLatencyMs, cfg.UsbHapticChannels[0], cfg.UsbHapticChannels[1], factory);
+                    activeDeviceId = usbControllers[0].Device.DevicePath;
+                    return output;
                 }
                 catch (Exception ex)
                 {
@@ -265,23 +291,14 @@ internal static class OutputFactory
             }
         }
 
-        List<DualSenseHid.Info> hid;
-        try
-        {
-            hid = DualSenseHid.Find();
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"HID device discovery failed: {ex.Message}");
-            return null;
-        }
-
-        var bt = hid.FirstOrDefault(h => h.IsBluetooth);
+        var bt = hid.FirstOrDefault(h => h.IsBluetooth && (controllerDeviceId == null || h.Device.DevicePath == controllerDeviceId));
         if (bt != null)
         {
             try
             {
-                return new BluetoothHidOutput(bt.Device, factory);
+                var output = new BluetoothHidOutput(bt.Device, factory);
+                activeDeviceId = bt.Device.DevicePath;
+                return output;
             }
             catch (Exception ex)
             {
@@ -304,13 +321,15 @@ internal static class OutputFactory
 /// <summary>Connect adaptive triggers. Failure does not stop haptic output.</summary>
 internal static class TriggerOutput
 {
-    public static TriggerHidWriter? Create(AppConfig cfg, HapticBus bus, bool preferBluetooth)
+    public static TriggerHidWriter? Create(AppConfig cfg, HapticBus bus, bool preferBluetooth, string? controllerDeviceId = null)
     {
         if (!cfg.Triggers.Enabled) return null;
         try
         {
             var hid = DualSenseHid.Find();
-            var info = hid.FirstOrDefault(h => h.IsBluetooth == preferBluetooth) ?? hid.FirstOrDefault();
+            var info = controllerDeviceId != null
+                ? hid.FirstOrDefault(h => h.Device.DevicePath == controllerDeviceId && h.IsBluetooth == preferBluetooth)
+                : hid.FirstOrDefault(h => h.IsBluetooth == preferBluetooth);
             if (info == null)
             {
                 Log.Warn("Triggers: no DualSense HID device was found; adaptive triggers are disabled.");

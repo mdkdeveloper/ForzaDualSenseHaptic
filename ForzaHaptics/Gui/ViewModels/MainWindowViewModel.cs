@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ForzaHaptics.Controllers;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Util;
 
@@ -33,6 +34,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IUserDialogService _dialogs;
     private readonly IPlatformShellService _shell;
     private readonly IUiDispatcher _dispatcher;
+    private readonly IControllerService? _controller;
     private bool _suppressProfileChange;
     private bool _disposed;
 
@@ -81,19 +83,60 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private float _rightMeter;
 
+    [ObservableProperty]
+    private string _controllerName = "DualSense";
+
+    [ObservableProperty]
+    private bool _isControllerConnected;
+
+    [ObservableProperty]
+    private bool _isBluetoothConnected;
+
+    [ObservableProperty]
+    private bool _isUsbConnected;
+
+    [ObservableProperty]
+    private int? _batteryPercent;
+
+    [ObservableProperty]
+    private bool _isControllerCharging;
+
+    [ObservableProperty]
+    private bool _isDisconnecting;
+
+    [ObservableProperty]
+    private string _controllerError = string.Empty;
+
+    public string ControllerStatusText => IsControllerConnected ? "Connected" : "Not connected";
+    public string BatteryText => BatteryPercent is { } percent ? $"{percent}%" : "—";
+    public string BatteryTooltip => !IsControllerConnected ? "Controller is not connected"
+        : BatteryPercent is null ? IsBluetoothConnected
+            ? "Battery level is unavailable; Bluetooth battery data requires enhanced input reports"
+            : "Battery level is unavailable"
+        : $"Battery: approximately {BatteryPercent}%{(IsControllerCharging ? " · Charging" : string.Empty)}";
+    public bool CanDisconnectController => !IsBusy && !IsDisconnecting &&
+        _controller?.Snapshot is { IsConnected: true, CanDisconnect: true, Transport: ControllerTransport.Bluetooth, DeviceId: not null };
+    public string DisconnectTooltip => IsDisconnecting ? "Disconnecting controller…"
+        : IsUsbConnected ? "USB supplies power; unplug the cable to disconnect"
+        : !IsControllerConnected ? "Controller is not connected"
+        : _controller?.Snapshot.CanDisconnect != true ? "Bluetooth device address is unavailable"
+        : "Turn off controller";
+
     public MainWindowViewModel(
         IProfileSession profiles,
         IHapticEngineFacade engine,
         IUserDialogService dialogs,
         IPlatformShellService shell,
         IUiDispatcher dispatcher,
-        IEnumerable<(LogLevel Level, string Text)>? earlyLog = null)
+        IEnumerable<(LogLevel Level, string Text)>? earlyLog = null,
+        IControllerService? controller = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        _controller = controller;
 
         Settings = new SettingsViewModel(_profiles.Current);
         Settings.Changed += OnSettingChanged;
@@ -122,6 +165,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public void RefreshStatus()
     {
+        RefreshControllerStatus();
         IsEngineRunning = _engine.IsRunning;
         EngineStateText = IsBusy ? "Working…" : IsEngineRunning ? "Running" : "Stopped";
         StatusText = IsBusy ? "…" : _engine.BuildStatus();
@@ -134,6 +178,52 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         DeviceText = device;
         StartStopText = IsEngineRunning ? "Stop" : "Start";
         RestartText = RestartPending ? "Restart output ⟳" : "Restart output";
+    }
+
+    private void RefreshControllerStatus()
+    {
+        var state = _controller?.Snapshot;
+        IsControllerConnected = state?.IsConnected == true;
+        ControllerName = IsControllerConnected && !string.IsNullOrWhiteSpace(state?.Name) ? state.Name : "DualSense";
+        IsBluetoothConnected = IsControllerConnected && state?.Transport == ControllerTransport.Bluetooth;
+        IsUsbConnected = IsControllerConnected && state?.Transport == ControllerTransport.Usb;
+        BatteryPercent = IsControllerConnected ? state?.BatteryPercent : null;
+        IsControllerCharging = IsControllerConnected && state?.IsCharging == true;
+        OnPropertyChanged(nameof(ControllerStatusText));
+        OnPropertyChanged(nameof(BatteryText));
+        OnPropertyChanged(nameof(BatteryTooltip));
+        OnPropertyChanged(nameof(CanDisconnectController));
+        OnPropertyChanged(nameof(DisconnectTooltip));
+        DisconnectControllerCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanDisconnectController))]
+    private async Task DisconnectControllerAsync()
+    {
+        if (!CanDisconnectController || _controller?.Snapshot.DeviceId is not { } deviceId)
+            return;
+
+        IsDisconnecting = true;
+        IsBusy = true;
+        ControllerError = string.Empty;
+        try
+        {
+            await _engine.StopAsync();
+            await _controller.DisconnectAsync(deviceId);
+            Log.Info("Bluetooth controller disconnected. Reconnect it manually when ready.");
+        }
+        catch (Exception exception)
+        {
+            ControllerError = $"Could not disconnect controller: {exception.Message}";
+            Log.Error(ControllerError);
+            await _dialogs.ShowErrorAsync(ControllerError);
+        }
+        finally
+        {
+            IsDisconnecting = false;
+            IsBusy = false;
+            RefreshStatus();
+        }
     }
 
     public async Task<bool> ConfirmCloseAsync() => await ConfirmLeaveAsync();
@@ -337,6 +427,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         Simulate = IsSimulationEnabled,
         Test = IsTestEnabled,
+        ControllerDeviceId = _controller?.Snapshot.DeviceId,
     };
 
     private async Task StartEngineAsync()
@@ -533,6 +624,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _profiles.ReloadedFromDisk -= OnReloadedFromDisk;
         Settings.Changed -= OnSettingChanged;
         _engine.Dispose();
+        _controller?.Dispose();
         _profiles.Dispose();
     }
 }

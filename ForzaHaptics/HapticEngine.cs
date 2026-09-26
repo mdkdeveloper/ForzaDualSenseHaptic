@@ -17,6 +17,7 @@ public sealed record EngineOptions
     public string? RecordPath { get; init; }
     public int? Port { get; init; }
     public string? Output { get; init; }
+    public string? ControllerDeviceId { get; init; }
 }
 
 /// <summary>
@@ -48,6 +49,7 @@ public sealed class HapticEngine : IDisposable
     }
 
     public bool IsRunning { get; private set; }
+    public string? ActiveControllerDeviceId { get; private set; }
     public EngineOptions Options => _options;
     public string OutputDescription => _output?.Description ?? "";
     public string TriggersDescription => _triggers?.Description ?? "";
@@ -79,11 +81,12 @@ public sealed class HapticEngine : IDisposable
             }
 
             string mode = (options.Output ?? cfg.Output).Trim().ToLowerInvariant();
-            _output = OutputFactory.Create(mode, cfg, Factory);
+            _output = OutputFactory.Create(mode, cfg, Factory, out string? activeDeviceId, options.ControllerDeviceId);
             if (_output == null) return false;
+            ActiveControllerDeviceId = activeDeviceId;
             Log.Ok("Output: " + _output.Description);
 
-            _triggers = options.Test ? null : TriggerOutput.Create(cfg, bus, _output is BluetoothHidOutput);
+            _triggers = options.Test ? null : TriggerOutput.Create(cfg, bus, _output is BluetoothHidOutput, activeDeviceId);
             if (_triggers != null) Log.Ok("Triggers: " + _triggers.Description);
 
             _cts = new CancellationTokenSource();
@@ -161,6 +164,7 @@ public sealed class HapticEngine : IDisposable
     {
         bool wasRunning = IsRunning;
         IsRunning = false;
+        ActiveControllerDeviceId = null;
         _cts?.Cancel();
         _receiver?.Dispose();
         _receiver = null;

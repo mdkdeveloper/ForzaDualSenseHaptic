@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <ApplicationIcon>Assets/app.ico</ApplicationIcon>
     <TargetFramework>net8.0-windows</TargetFramework>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <!-- Allows running on .NET 9/10 when the .NET 8 runtime is not installed. -->
@@ -29,6 +30,7 @@
 
   <ItemGroup>
     <None Update="config.json" CopyToOutputDirectory="PreserveNewest" />
+    <AvaloniaResource Include="Assets/app.ico" />
   </ItemGroup>
 
 </Project>

@@ -4,7 +4,9 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:ForzaHaptics.Gui.ViewModels"
         xmlns:views="using:ForzaHaptics.Gui.Views"
+        xmlns:controls="using:ForzaHaptics.Gui.Controls"
         Title="{Binding Title}"
+        Icon="avares://ForzaHaptics/Assets/app.ico"
         Width="1120" Height="820" MinWidth="760" MinHeight="560"
         Background="{StaticResource AppBackgroundBrush}"
         WindowStartupLocation="CenterScreen">
@@ -34,8 +36,55 @@
         <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveCommand}" />
     </Window.KeyBindings>
 
-    <Grid RowDefinitions="Auto,*,Auto">
-        <Border Grid.Row="0" Background="{StaticResource AppSurfaceBrush}"
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <Border x:Name="ControllerPanel" Grid.Row="0" Background="{StaticResource AppSurfaceBrush}"
+                BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,0,0,1" Padding="18,10">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                <Path Grid.Column="0" Width="40" Height="28" Stretch="Uniform" Margin="0,0,12,0"
+                      VerticalAlignment="Center" Fill="{StaticResource AppTextPrimaryBrush}"
+                      AutomationProperties.Name="Game controller"
+                      Data="M 14,2 C 9,2 6,5 4,12 L 0,28 C -1,34 3,37 7,33 L 15,25 L 33,25 L 41,33 C 45,37 49,34 48,28 L 44,12 C 42,5 39,2 34,2 L 14,2 Z M 11,10 L 15,10 L 15,14 L 19,14 L 19,18 L 15,18 L 15,22 L 11,22 L 11,18 L 7,18 L 7,14 L 11,14 Z M 33,10 L 37,10 L 37,14 L 33,14 Z M 38,15 L 42,15 L 42,19 L 38,19 Z M 28,15 L 32,15 L 32,19 L 28,19 Z M 33,20 L 37,20 L 37,24 L 33,24 Z" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="{Binding ControllerName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Ellipse Width="6" Height="6" Fill="{StaticResource AppSuccessBrush}"
+                                 VerticalAlignment="Center" IsVisible="{Binding IsControllerConnected}" />
+                        <TextBlock Text="{Binding ControllerStatusText}" Classes="secondary" FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0" Spacing="6"
+                            IsVisible="{Binding IsBluetoothConnected}" ToolTip.Tip="Connected through Bluetooth">
+                    <Path Width="14" Height="22" Stretch="Uniform" Stroke="{StaticResource AppAccentBrush}" StrokeThickness="2"
+                          Data="M 2,5 L 14,17 L 8,23 L 8,1 L 14,7 L 2,19" AutomationProperties.Name="Bluetooth" />
+                    <TextBlock Text="Bluetooth" VerticalAlignment="Center" Classes="secondary" FontSize="12" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0" Spacing="6"
+                            IsVisible="{Binding IsUsbConnected}" ToolTip.Tip="Connected through USB">
+                    <Path Width="18" Height="24" Stretch="Uniform" Stroke="{StaticResource AppAccentBrush}" StrokeThickness="1.8"
+                          Data="M 10,23 L 10,2 M 6,6 L 10,2 L 14,6 M 10,19 L 3,14 L 3,8 M 10,15 L 17,10 L 17,7 M 15,4 L 19,4 L 19,7 L 15,7 Z M 1,5 L 5,5 L 5,8 L 1,8 Z"
+                          AutomationProperties.Name="USB" />
+                    <TextBlock Text="USB" VerticalAlignment="Center" Classes="secondary" FontSize="12" />
+                </StackPanel>
+                <Grid Grid.Column="3" Width="64" Height="48" Margin="0,0,12,0" ToolTip.Tip="{Binding BatteryTooltip}"
+                      AutomationProperties.Name="{Binding BatteryTooltip}">
+                    <controls:BatteryRing x:Name="ControllerBattery" Width="48" Height="48" HorizontalAlignment="Left"
+                                          Percentage="{Binding BatteryPercent}" />
+                    <TextBlock Text="{Binding BatteryText}" Width="48" HorizontalAlignment="Left" TextAlignment="Center"
+                               VerticalAlignment="Center" FontSize="11" FontWeight="SemiBold" />
+                    <Path Width="10" Height="17" HorizontalAlignment="Right" VerticalAlignment="Center" Stretch="Uniform"
+                          IsVisible="{Binding IsControllerCharging}" Fill="{StaticResource AppWarningBrush}"
+                          Data="M 6,0 L 0,9 L 4,9 L 2,16 L 10,6 L 6,6 Z" AutomationProperties.Name="Charging" />
+                </Grid>
+                <Button x:Name="DisconnectControllerButton" Grid.Column="4" Width="38" Height="38" Padding="9"
+                        VerticalAlignment="Center" Command="{Binding DisconnectControllerCommand}"
+                        IsEnabled="{Binding CanDisconnectController}" ToolTip.Tip="{Binding DisconnectTooltip}" ToolTip.ShowOnDisabled="True"
+                        AutomationProperties.Name="Turn off controller">
+                    <Path Width="18" Height="20" Stretch="Uniform" Stroke="{Binding $parent[Button].Foreground}" StrokeThickness="2"
+                          Data="M 10,1 L 10,11 M 5,5 C -3,10 1,21 10,21 C 19,21 23,10 15,5" />
+                </Button>
+            </Grid>
+        </Border>
+        <Border Grid.Row="1" Background="{StaticResource AppSurfaceBrush}"
                 BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,0,0,1" Padding="14,10">
             <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="Auto,220,*,Auto,Auto">
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile" VerticalAlignment="Center"
@@ -70,9 +119,9 @@
             </Grid>
         </Border>
 
-        <views:SettingsView Grid.Row="1" DataContext="{Binding Settings}" />
+        <views:SettingsView Grid.Row="2" DataContext="{Binding Settings}" />
 
-        <Border x:Name="RuntimePanel" Grid.Row="2" Background="{StaticResource AppSurfaceBrush}"
+        <Border x:Name="RuntimePanel" Grid.Row="3" Background="{StaticResource AppSurfaceBrush}"
                 BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
                 <WrapPanel Grid.Row="0" Orientation="Horizontal">

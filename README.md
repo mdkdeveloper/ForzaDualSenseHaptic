@@ -69,6 +69,10 @@ The UI is built with Avalonia and an MVVM architecture. Avalonia makes the prese
 ## Window and profiles
 
 - The Avalonia interface uses a fixed dark theme with high-contrast text and controls, independently of the Windows theme or accent color.
+- The top **DualSense** panel monitors the controller even when haptics are stopped. It shows USB/Bluetooth connection, an approximate battery percentage, and a lightning symbol while charging. The ring is red at 20% or below, amber through 50%, and green above 50%; `—` means the battery reading is unavailable. DualSense reports charge in coarse steps, not precise one-percent measurements.
+- The **power** button stops haptics and adaptive triggers, then disconnects the displayed Bluetooth controller without confirmation. Reconnect it manually and select **Start** to resume. USB supplies power, so the button is disabled over USB. Bluetooth disconnect and physical power-off have been verified on a DualSense; the Windows command itself requests a disconnect.
+- The application uses the hybrid Forza × DualSense icon; its SVG/PNG/ICO exports and size preview are in [design/icons](design/icons/README.md).
+- Bluetooth battery readings require enhanced input reports. Monitoring is passive: it does not change the controller's report mode merely to obtain a battery reading. Until enhanced reports are available, the panel shows `—`. Forcing that mode can affect Windows DirectInput compatibility; see the [SDL enhanced-report documentation](https://wiki.libsdl.org/SDL3/SDL_HINT_JOYSTICK_ENHANCED_REPORTS).
 - The **General**, **Vibration**, and **Triggers** sections are available from the left navigation. Hover over a setting name to see its description. Changes are **applied immediately**, so you can feel them while tuning, but they are written to disk only when you select **Save** or press Ctrl+S. **Revert** restores the saved values, and unsaved changes add `*` to the window title.
 - Fields marked with **⟳**—including port, output, channels, and trigger enablement—take effect after **Restart output**.
 - Runtime status, device information, output levels, and engine controls are grouped below the settings. The **Activity log** is collapsed by default; expand it when you need detailed runtime messages.
@@ -121,6 +125,7 @@ ForzaHaptics/
   Telemetry/                       FH6 packet parsing, UDP receive/forwarding, recording, replay, and simulation
   Haptics/                         telemetry processing, DSP, impulses, and two-actuator signal synthesis
   Output/                          WASAPI, Bluetooth HID, trigger HID, and WAV output
+  Controllers/                     independent HID presence/battery monitoring and Windows Bluetooth disconnect
   Triggers/                        telemetry-driven L2/R2 processing and trigger-effect encoding
   Config/                          profile storage, load/save, hot reload, and live configuration updates
   Gui/App.axaml(.cs)               Avalonia application and Fluent theme bootstrap
@@ -137,6 +142,12 @@ ForzaHaptics/
 The presentation layer uses **Avalonia 12.1.3** with compiled bindings and **CommunityToolkit.Mvvm 8.4.2**. View models own UI state and commands; code-behind is limited to view-specific lifecycle work. The haptic engine and console modes remain independent of the UI framework.
 
 To add an effect, calculate its level in `TelemetryProcessor.Process`, place it in `HapticTargets` or enqueue a `HapticKick`, then add the corresponding generator in `HapticSynth.Render`.
+
+## Validation
+
+Run `dotnet run --project ForzaHaptics.Tests` for parser, controller lifecycle, view-model, and Avalonia layout tests. Set `FORZAHAPTICS_SCREENSHOT_DIR` to an output folder to render Bluetooth, charging USB, and disconnected states at two window widths and 100%/150%/200% scale.
+
+Hardware diagnostics are opt-in. Set `FORZAHAPTICS_HARDWARE_TEST=1` and `FORZAHAPTICS_HARDWARE_MODE` to `passive`, `haptics`, or `disconnect`, then run `dotnet run --project ForzaHaptics.Tests -- -class ForzaHaptics.Tests.ControllerHardwareTests`. Passive mode only reads status; haptics runs a three-second motor test; disconnect removes the selected Bluetooth connection. Ordinary tests do not access a physical controller.
 
 ## Acknowledgements
 
