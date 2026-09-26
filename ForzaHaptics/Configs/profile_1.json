@@ -2,6 +2,7 @@
 // so values can be adjusted while playing. Gain = effect strength (0 disables it).
 {
   // UDP port; enter the same value in FH6: Settings → HUD and Gameplay → Data Out IP Port
+  "ConfigVersion": 4,
   "Port": 5310,
   // Forward packets to other applications, e.g. ["127.0.0.1:5300"] (only one application can listen on a UDP port)
   "ForwardTo": [],
@@ -79,7 +80,7 @@
     "FreqHz": 150
   },
 
-  // Wheel lockup under braking, pulsing like ABS
+  // Inferred longitudinal braking slip; pulse pattern does not report actual ABS activation
   "Lockup": {
     "Enabled": true,
     "Gain": 0.5,
@@ -129,73 +130,31 @@
     "SplashFreqHz": 140
   },
 
-  // ---------- L2/R2 adaptive triggers (logic based on HorizonHaptics) ----------
-  // Mode: Off — free trigger | Resistance — resistance only | Vibration — resistance plus vibration when grip is lost
-  // Resistance and HandbrakeStrength use a 0..8 scale; vibration frequencies/amplitudes use 0..255.
-  // If the triggers do not work, disable trigger effects in Steam Input / DS4Windows / DSX.
+  // Event vibration only: gear shifts, wheelspin and lateral/braking slip. No baseline resistance.
+  // Amplitudes are normalized command levels, not a certified hardware lifetime limit.
   "Triggers": {
     "Enabled": true,
-    // Overall strength of all trigger effects (0..1): 0.65 = 35% weaker than the original HorizonHaptics values.
-    // Lower values feel softer and reduce wear on the trigger mechanism.
     "Strength": 0.65,
-
-    // Hysteresis: entry and exit thresholds differ, so the previous state is held within the range
-    // and the trigger does not chatter at boundaries (resistance ↔ ABS, level 2 ↔ 3). Enabled: false restores the old behavior.
-    "Hysteresis": {
-      "Enabled": true,
-      "SlipBand": 0.2,        // exit ABS/wheelspin when slip < GripLoss × (1 − 0.2)
-      "PedalBand": 20,        // pedal (0..255): exit 20 below the entry threshold
-      "LevelDeadband": 0.35,  // resistance changes only when the value moves by 0.5 + 0.35
-      "VibDeadband": 3,       // vibration frequency/amplitude update when the change is ≥ 3
-      "HoldMs": 150           // minimum time between mode transitions
-    },
-
-    // R2 (throttle): resistance grows with acceleration; wheelspin causes vibration
+    "Hysteresis": { "Enabled": true, "SlipBand": 0.2, "PedalBand": 20, "LevelDeadband": 0.35, "VibDeadband": 3, "HoldMs": 150 },
     "Throttle": {
-      "Mode": "Vibration",
+      "Enabled": true, "SlipEnabled": true, "LateralSlipEnabled": true,
       "Intensity": 0.7,
-      "GripLoss": 0.6,            // average TireCombinedSlip at which grip is considered lost
-      "TurnAccelScale": 0.25,     // lateral-acceleration contribution to resistance
-      "FwdAccelScale": 1.0,       // longitudinal-acceleration contribution
-      "AccelLimit": 10,           // m/s² at which resistance reaches its maximum
-      "VibModeStart": 5,          // throttle (0..255) must exceed this value to enable vibration
-      "VibFreqMin": 30,           // vibration frequency (Hz) at the slip threshold; below ~25 it feels like tapping
-      "MaxVibration": 60,         // ...and during heavy slip
-      "VibSmoothing": 1.0,        // 1 = no smoothing; lower values are smoother
-      "VibAmpMin": 45,            // vibration strength (0..255) at the slip threshold
-      "VibAmpMax": 110,           // ...and during heavy slip
-      "VibAttackMs": 200,         // time in ms for vibration to ramp up smoothly
-      "MinResistance": 0,
-      "MaxResistance": 3,
-      "ResistanceSmoothing": 0.9,
-      "BoostResistance": 0.25     // additional resistance while boost is active
+      "GripLoss": 0.9, "VibFreqMin": 30, "MaxVibration": 45, "VibSmoothing": 1.0,
+      "VibAmpMin": 0.35, "VibAmpMax": 0.5, "VibAttackMs": 80, "VibReleaseMs": 80,
+      "SlipMode": "Continuous", "PulseDurationMs": 250, "PulsePauseMs": 250
     },
-
-    // L2 (brake): progressive resistance; handbrake forms a hard wall; ABS keeps upper zones firm while lower zones pulse
     "Brake": {
-      "Mode": "Vibration",
+      "Enabled": true, "SlipEnabled": true,
       "Intensity": 0.7,
-      "GripLoss": 0.05,
-      "MinResistance": 0,
-      "MaxResistance": 7,
-      "ResistanceSmoothing": 0.4,
-      "HandbrakeStrength": 8,
-      "AbsWallZones": 3,          // number of upper zones (1..9) that remain firm during ABS
-      "AbsWallStrength": 5,       // strength of the firm upper zones during ABS (1..8)
-      "AbsAmpMax": 4,             // lower-zone pulse strength during heavy slip (1..8)
-      "MinVibration": 20,         // ABS frequency during light slip
-      "MaxVibration": 40,         // ...and during heavy slip
-      "VibSmoothing": 0.8,
-      "VibAttackMs": 150          // time for ABS pulses to ramp up smoothly
+      "GripLoss": 0.9, "MinVibration": 25, "MaxVibration": 35, "VibSmoothing": 0.8,
+      "VibAmpMin": 0.35, "AbsAmpMax": 0.5, "VibAttackMs": 80, "VibReleaseMs": 80,
+      "SlipMode": "Continuous", "PulseDurationMs": 250, "PulsePauseMs": 250
     },
-
-    // Short trigger pulse during a gear shift
-    "GearShift": { "Throttle": true, "Brake": true, "Freq": 20, "Amp": 100, "DurationMs": 60 },
-
-    // Released trigger: road texture (FH6 vibration must be enabled) and rumble strips
-    "Surface": { "Throttle": true, "Brake": true, "Freq": 10, "Amp": 10, "StripFreq": 25, "StripAmp": 150 },
-
-    // Jolt on both triggers when striking an object (SmashableVelDiff, m/s)
-    "Collision": { "Enabled": true, "ThresholdMps": 3, "Freq": 40, "Amp": 255, "DurationMs": 150 }
+    "GearShift": {
+      "ThrottleUpshift": true, "ThrottleDownshift": true, "BrakeUpshift": false, "BrakeDownshift": true,
+      "Freq": 20, "Amp": 1.0, "DurationMs": 300, "AttackMs": 50, "ReleaseMs": 50
+    },
+    "Surface": { "Throttle": false, "Brake": false, "Freq": 10, "Amp": 0.125, "StripFreq": 25, "StripAmp": 0.25 },
+    "Collision": { "Enabled": false, "ThresholdMps": 3, "Freq": 40, "Amp": 0.25, "DurationMs": 150 }
   }
 }

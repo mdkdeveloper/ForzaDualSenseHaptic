@@ -1,4 +1,4 @@
-using ForzaHaptics.Util;
+using System.Text.Json.Serialization;
 
 namespace ForzaHaptics;
 
@@ -64,6 +64,10 @@ public static class UiTabs
 [UiGroup("Strength and frequencies", UiTabs.General)]
 public sealed class AppConfig
 {
+    public const int CurrentVersion = 4;
+    public int ConfigVersion { get; set; } = CurrentVersion;
+    [JsonIgnore] public string? MigrationNotice { get; internal set; }
+
     private const string Connection = "Connection";
 
     [Ui("UDP port", Group = Connection, Restart = true,
@@ -114,21 +118,7 @@ public sealed class AppConfig
 
     public TriggersConfig Triggers { get; set; } = new();
 
-    public void Validate()
-    {
-        (Triggers ??= new()).Validate();
-        (Dynamics ??= new()).Validate();
-        Road ??= new(); RumbleStrip ??= new(); Suspension ??= new(); Slip ??= new(); Wheelspin ??= new();
-        Lockup ??= new(); Engine ??= new(); GearShift ??= new(); Impact ??= new(); Water ??= new();
-        ForwardTo ??= new();
-        Output ??= "auto";
-        if (Port is < 1 or > 65535) throw new InvalidDataException("Port must be between 1 and 65535");
-        if (UsbHapticChannels is not { Length: 2 }) throw new InvalidDataException("UsbHapticChannels must contain 2 numbers, e.g. [2, 3]");
-        if (UsbLatencyMs is < 3 or > 200) UsbLatencyMs = Math.Clamp(UsbLatencyMs, 3, 200);
-        MasterGain = MathX.Clamp(MasterGain, 0f, 4f);
-        LowCutHz = MathX.Clamp(LowCutHz, 5f, 100f);
-        HighCutHz = MathX.Clamp(HighCutHz, 80f, 1000f);
-    }
+    public void Validate() => ConfigValidation.Validate(this);
 }
 
 [UiGroup("Compressor", UiTabs.General,
@@ -148,14 +138,7 @@ public sealed class DynamicsConfig
     [Ui("Release, ms", 5, 2000, 5)]
     public float ReleaseMs { get; set; } = 150f;
 
-    public void Validate()
-    {
-        Threshold = MathX.Clamp(Threshold, 0.01f, 1f);
-        Ratio = MathX.Clamp(Ratio, 1f, 20f);
-        Makeup = MathX.Clamp(Makeup, 0f, 8f);
-        AttackMs = MathX.Clamp(AttackMs, 0.1f, 100f);
-        ReleaseMs = MathX.Clamp(ReleaseMs, 5f, 2000f);
-    }
+    public void Validate() => ConfigValidation.Validate(this);
 }
 
 [UiGroup("Road texture", UiTabs.Vibration, Tip = "Noise based on the game's SurfaceRumble value and speed")]
@@ -195,7 +178,7 @@ public sealed class SuspensionConfig
     [Ui("Decay, ms", 5, 500, 5)] public float DecayMs { get; set; } = 70f;
 }
 
-[UiGroup("Oversteer / understeer", UiTabs.Vibration, Tip = "Loss of grip: TireCombinedSlip")]
+[UiGroup("Grip loss", UiTabs.Vibration, Tip = "Combined-slip cue; does not distinguish oversteer from understeer")]
 public sealed class SlipConfig
 {
     [Ui("Enabled")] public bool Enabled { get; set; } = true;
@@ -215,7 +198,7 @@ public sealed class WheelspinConfig
     [Ui("Frequency, Hz", 20, 400, 1)] public float FreqHz { get; set; } = 150f;
 }
 
-[UiGroup("Wheel lockup (ABS)", UiTabs.Vibration)]
+[UiGroup("Braking slip", UiTabs.Vibration, Tip = "Inferred longitudinal slip during braking; not measured ABS activation")]
 public sealed class LockupConfig
 {
     [Ui("Enabled")] public bool Enabled { get; set; } = true;
@@ -277,7 +260,12 @@ public sealed class WaterConfig
 // ---------------- L2/R2 adaptive triggers ----------------
 // Logic and default values are based on HorizonHaptics (github.com/haritha99ch/HorizonHaptics).
 
-/// <summary>Off — free trigger; Resistance — resistance only; Vibration — resistance plus vibration when grip is lost.</summary>
+/// <summary>Pedal pressure for new profiles; signed longitudinal acceleration source for migrated profiles.</summary>
+public enum TriggerSlipMode { Continuous, Repeated }
+
+public enum TriggerResistanceSource { Pedal, Acceleration }
+
+/// <summary>Legacy version 1/2 modes used only while migrating profiles.</summary>
 public enum TriggerMode
 {
     Off,
@@ -289,7 +277,7 @@ public enum TriggerMode
 public sealed class TriggersConfig
 {
     [Ui("Enabled", Restart = true)] public bool Enabled { get; set; } = true;
-    [Ui("Overall strength", 0, 1, 0.01, Tip = "Scales down all trigger effects together to reduce mechanical load")]
+    [Ui("Overall strength", 0, 1, 0.01, Tip = "Scales trigger effects; this is a comfort control, not a certified wear limit")]
     public float Strength { get; set; } = 0.65f;
     public TriggerHysteresisConfig Hysteresis { get; set; } = new();
     public ThrottleTriggerConfig Throttle { get; set; } = new();
@@ -298,39 +286,7 @@ public sealed class TriggersConfig
     public TriggerSurfaceConfig Surface { get; set; } = new();
     public TriggerCollisionConfig Collision { get; set; } = new();
 
-    public void Validate()
-    {
-        Strength = MathX.Clamp(Strength, 0f, 1f);
-        Hysteresis ??= new();
-        Hysteresis.SlipBand = MathX.Clamp(Hysteresis.SlipBand, 0f, 0.9f);
-        Hysteresis.PedalBand = Math.Clamp(Hysteresis.PedalBand, 0, 100);
-        Hysteresis.LevelDeadband = MathX.Clamp(Hysteresis.LevelDeadband, 0f, 2f);
-        Hysteresis.VibDeadband = Math.Clamp(Hysteresis.VibDeadband, 0, 50);
-        Hysteresis.HoldMs = MathX.Clamp(Hysteresis.HoldMs, 0f, 2000f);
-        Throttle ??= new();
-        Brake ??= new();
-        GearShift ??= new();
-        Surface ??= new();
-        Collision ??= new();
-        Throttle.Intensity = MathX.Clamp(Throttle.Intensity, 0f, 2f);
-        Throttle.MinResistance = Math.Clamp(Throttle.MinResistance, 0, 8);
-        Throttle.MaxResistance = Math.Clamp(Throttle.MaxResistance, 0, 8);
-        Throttle.VibSmoothing = MathX.Clamp(Throttle.VibSmoothing, 0.01f, 1f);
-        Throttle.ResistanceSmoothing = MathX.Clamp(Throttle.ResistanceSmoothing, 0.01f, 1f);
-        Throttle.VibAttackMs = MathX.Clamp(Throttle.VibAttackMs, 0f, 2000f);
-        Throttle.VibAmpMin = Math.Clamp(Throttle.VibAmpMin, 0, 255);
-        Throttle.VibAmpMax = Math.Clamp(Throttle.VibAmpMax, 0, 255);
-        Brake.Intensity = MathX.Clamp(Brake.Intensity, 0f, 2f);
-        Brake.MinResistance = Math.Clamp(Brake.MinResistance, 0, 8);
-        Brake.MaxResistance = Math.Clamp(Brake.MaxResistance, 0, 8);
-        Brake.HandbrakeStrength = Math.Clamp(Brake.HandbrakeStrength, 0, 8);
-        Brake.AbsWallZones = Math.Clamp(Brake.AbsWallZones, 1, 9);
-        Brake.AbsWallStrength = Math.Clamp(Brake.AbsWallStrength, 1, 8);
-        Brake.AbsAmpMax = Math.Clamp(Brake.AbsAmpMax, 1, 8);
-        Brake.VibAttackMs = MathX.Clamp(Brake.VibAttackMs, 0f, 2000f);
-        Brake.VibSmoothing = MathX.Clamp(Brake.VibSmoothing, 0.01f, 1f);
-        Brake.ResistanceSmoothing = MathX.Clamp(Brake.ResistanceSmoothing, 0.01f, 1f);
-    }
+    public void Validate() => ConfigValidation.Validate(this);
 }
 
 [UiGroup("Hysteresis", UiTabs.Triggers,
@@ -338,97 +294,115 @@ public sealed class TriggersConfig
 public sealed class TriggerHysteresisConfig
 {
     [Ui("Enabled")] public bool Enabled { get; set; } = true;
-    [Ui("Slip band", 0, 0.9, 0.01, Tip = "Exit ABS/wheelspin at GripLoss × (1 − this value)")]
+    [Ui("Slip band", 0, 0.9, 0.01, Tip = "Exit inferred slip warning at GripLoss × (1 − this value)")]
     public float SlipBand { get; set; } = 0.2f;
-    [Ui("Pedal band", 0, 100, 1, Tip = "Pedal (0..255): exit this much below the entry threshold")]
     public int PedalBand { get; set; } = 20;
-    [Ui("Resistance deadband", 0, 2, 0.05, Tip = "Resistance changes only after the value moves by 0.5 plus this amount")]
     public float LevelDeadband { get; set; } = 0.35f;
-    [Ui("Vibration deadband", 0, 50, 1, Tip = "Frequency/amplitude update only after changing by at least this amount")]
     public int VibDeadband { get; set; } = 3;
-    [Ui("Mode hold time, ms", 0, 2000, 10, Tip = "Minimum time between resistance ↔ vibration transitions")]
     public float HoldMs { get; set; } = 150f;
 }
 
-[UiGroup("R2 — throttle", UiTabs.Triggers, Tip = "Resistance from acceleration; gentle vibration during wheelspin under throttle")]
+[UiGroup("R2 — throttle", UiTabs.Triggers, Tip = "Independent wheelspin and lateral-slip vibration cues")]
 public sealed class ThrottleTriggerConfig
 {
-    [Ui("Mode", Tip = "Off — free; Resistance — resistance only; Vibration — resistance plus vibration when grip is lost")]
-    public TriggerMode Mode { get; set; } = TriggerMode.Vibration;
+    [Ui("Channel enabled (all effects)", Tip = "Master switch including gear shifts. To keep shifts only, leave this on and turn off the slip effects below.")] public bool Enabled { get; set; } = true;
+    [JsonIgnore] public bool ResistanceEnabled { get; set; } = false;
+    [Ui("Wheelspin", Tip = "Longitudinal slip of driven wheels under physically pressed R2; braking suppresses this cue")] public bool SlipEnabled { get; set; } = true;
+    [Ui("Lateral slip")] public bool LateralSlipEnabled { get; set; } = true;
+    [JsonIgnore] public int StartZone { get; set; } = 1;
+    [Ui("Slip pattern")] public TriggerSlipMode SlipMode { get; set; } = TriggerSlipMode.Continuous;
+    [Ui("Repeated pulse pause, ms", 0, 5000, 10)] public float PulsePauseMs { get; set; } = 250f;
+    [JsonIgnore] public TriggerResistanceSource ResistanceSource { get; set; } = TriggerResistanceSource.Pedal;
+    [JsonIgnore] public TriggerMode Mode { get; set; } = TriggerMode.Vibration;
     [Ui("Intensity", 0, 2, 0.05)] public float Intensity { get; set; } = 0.7f;
-    [Ui("Slip threshold", 0, 5, 0.05, Tip = "Average TireCombinedSlip at which grip is considered lost")]
-    public float GripLoss { get; set; } = 0.6f;
-    [Ui("Lateral g contribution", 0, 2, 0.05)] public float TurnAccelScale { get; set; } = 0.25f;
-    [Ui("Longitudinal g contribution", 0, 2, 0.05)] public float FwdAccelScale { get; set; } = 1.0f;
-    [Ui("Maximum acceleration, m/s²", 1, 50, 0.5, Tip = "Resistance reaches its maximum at this acceleration")]
-    public float AccelLimit { get; set; } = 10f;
-    [Ui("Throttle for vibration", 0, 255, 1, Tip = "Throttle (0..255) must exceed this value to enable vibration")]
-    public int VibModeStart { get; set; } = 5;
+    [Ui("Slip threshold", 0, 5, 0.05, Tip = "Normalized longitudinal slip threshold for an inferred grip warning")]
+    public float GripLoss { get; set; } = 0.9f;
+    // Legacy source compatibility only; ignored by serialization and the event-only processor.
+    [JsonIgnore] public float TurnAccelScale { get; set; } = 0.25f;
+    [JsonIgnore] public float FwdAccelScale { get; set; } = 1.0f;
+    [JsonIgnore] public float AccelLimit { get; set; } = 10f;
+    [JsonIgnore] public int VibModeStart { get; set; } = 20;
     [Ui("Minimum vibration frequency, Hz", 0, 255, 1, Tip = "Below ~25, pulses feel like individual taps on the finger")]
     public int VibFreqMin { get; set; } = 30;
-    [Ui("Maximum vibration frequency, Hz", 0, 255, 1)] public int MaxVibration { get; set; } = 60;
+    [Ui("Maximum vibration frequency, Hz", 0, 255, 1)] public int MaxVibration { get; set; } = 45;
     [Ui("Frequency smoothing", 0.01, 1, 0.01, Tip = "1 = no smoothing; lower values are smoother")]
     public float VibSmoothing { get; set; } = 1.0f;
-    [Ui("Minimum vibration strength", 0, 255, 1, Tip = "At the slip threshold")]
-    public int VibAmpMin { get; set; } = 45;
-    [Ui("Maximum vibration strength", 0, 255, 1, Tip = "During heavy slip")]
-    public int VibAmpMax { get; set; } = 110;
+    [Ui("Minimum vibration strength", 0, 1, 0.01, Tip = "At the slip threshold")]
+    public float VibAmpMin { get; set; } = 0.35f;
+    [Ui("Maximum vibration strength", 0, 1, 0.01, Tip = "During heavy slip; normalized amplitude, not a force measurement")]
+    public float VibAmpMax { get; set; } = 0.5f;
     [Ui("Attack, ms", 0, 2000, 10, Tip = "Time for vibration to ramp smoothly from zero")]
-    public float VibAttackMs { get; set; } = 200f;
-    [Ui("Minimum resistance", 0, 8, 1)] public int MinResistance { get; set; } = 0;
-    [Ui("Maximum resistance", 0, 8, 1)] public int MaxResistance { get; set; } = 3;
-    [Ui("Resistance smoothing", 0.01, 1, 0.01)] public float ResistanceSmoothing { get; set; } = 0.9f;
-    [Ui("Additional boost resistance", 0, 8, 0.05)] public float BoostResistance { get; set; } = 0.25f;
+    public float VibAttackMs { get; set; } = 80f;
+    [Ui("Pulse duration, ms", 0, 2000, 10, Tip = "Duration used by the repeated slip pattern")]
+    public float PulseDurationMs { get; set; } = 250f;
+    [Ui("Release, ms", 0, 2000, 10)] public float VibReleaseMs { get; set; } = 80f;
+    [JsonIgnore] public float RearmMs { get; set; } = 500f;
+    [JsonIgnore] public int MinResistance { get; set; } = 2;
+    [JsonIgnore] public int MaxResistance { get; set; } = 5;
+    [JsonIgnore] public float ResistanceSmoothing { get; set; } = 0.9f;
+    [JsonIgnore] public float BoostResistance { get; set; } = 0f;
 }
 
-[UiGroup("L2 — brake", UiTabs.Triggers, Tip = "Progressive resistance, handbrake, and ABS: upper zones resist while lower zones pulse")]
+[UiGroup("L2 — brake", UiTabs.Triggers, Tip = "Inferred braking-slip vibration; not a measured ABS state")]
 public sealed class BrakeTriggerConfig
 {
-    [Ui("Mode", Tip = "Off — free; Resistance — resistance only; Vibration — resistance plus ABS")]
-    public TriggerMode Mode { get; set; } = TriggerMode.Vibration;
+    [Ui("Channel enabled (all effects)", Tip = "Master switch including gear shifts. To keep shifts only, leave this on and turn off the slip effects below.")] public bool Enabled { get; set; } = true;
+    [JsonIgnore] public bool ResistanceEnabled { get; set; } = false;
+    [Ui("Braking slip")] public bool SlipEnabled { get; set; } = true;
+    [JsonIgnore] public int StartZone { get; set; } = 1;
+    [Ui("Slip pattern")] public TriggerSlipMode SlipMode { get; set; } = TriggerSlipMode.Continuous;
+    [Ui("Repeated pulse pause, ms", 0, 5000, 10)] public float PulsePauseMs { get; set; } = 250f;
+    [Ui("Minimum vibration strength", 0, 1, 0.01)] public float VibAmpMin { get; set; } = 0.35f;
+    [JsonIgnore] public TriggerMode Mode { get; set; } = TriggerMode.Vibration;
     [Ui("Intensity", 0, 2, 0.05)] public float Intensity { get; set; } = 0.7f;
-    [Ui("Slip threshold", 0, 5, 0.01)] public float GripLoss { get; set; } = 0.05f;
-    [Ui("Minimum resistance", 0, 8, 1)] public int MinResistance { get; set; } = 0;
-    [Ui("Maximum resistance", 0, 8, 1)] public int MaxResistance { get; set; } = 7;
-    [Ui("Resistance smoothing", 0.01, 1, 0.01)] public float ResistanceSmoothing { get; set; } = 0.4f;
-    [Ui("Handbrake", 0, 8, 1)] public int HandbrakeStrength { get; set; } = 8;
-    [Ui("ABS: resistance zones", 1, 9, 1, Tip = "Number of upper zones (out of 10) that remain resistant during ABS")]
-    public int AbsWallZones { get; set; } = 3;
-    [Ui("ABS: wall strength", 1, 8, 1)] public int AbsWallStrength { get; set; } = 5;
-    [Ui("ABS: pulse strength", 1, 8, 1)] public int AbsAmpMax { get; set; } = 4;
-    [Ui("ABS: minimum frequency, Hz", 0, 255, 1)] public int MinVibration { get; set; } = 20;
-    [Ui("ABS: maximum frequency, Hz", 0, 255, 1)] public int MaxVibration { get; set; } = 40;
+    [Ui("Slip threshold", 0, 5, 0.01)] public float GripLoss { get; set; } = 0.9f;
+    [JsonIgnore] public int MinResistance { get; set; } = 3;
+    [JsonIgnore] public int MaxResistance { get; set; } = 7;
+    [JsonIgnore] public float ResistanceSmoothing { get; set; } = 0.4f;
+    [JsonIgnore] public int HandbrakeStrength { get; set; } = 0;
+    [Ui("Slip pulse strength", 0, 1, 0.01)] public float AbsAmpMax { get; set; } = 0.5f;
+    [Ui("Braking slip: minimum frequency, Hz", 0, 255, 1)] public int MinVibration { get; set; } = 25;
+    [Ui("Braking slip: maximum frequency, Hz", 0, 255, 1)] public int MaxVibration { get; set; } = 35;
     [Ui("Frequency smoothing", 0.01, 1, 0.01)] public float VibSmoothing { get; set; } = 0.8f;
-    [Ui("ABS attack, ms", 0, 2000, 10)] public float VibAttackMs { get; set; } = 150f;
+    [Ui("Braking slip attack, ms", 0, 2000, 10)] public float VibAttackMs { get; set; } = 80f;
+    [Ui("Pulse duration, ms", 0, 2000, 10, Tip = "Duration used by the repeated slip pattern")]
+    public float PulseDurationMs { get; set; } = 250f;
+    [Ui("Release, ms", 0, 2000, 10)] public float VibReleaseMs { get; set; } = 80f;
+    [JsonIgnore] public float RearmMs { get; set; } = 500f;
 }
 
-[UiGroup("Gear-shift pulse", UiTabs.Triggers)]
+[UiGroup("Gear-shift pulse", UiTabs.Triggers, Tip = "Optional cue requiring an engaged pedal")]
 public sealed class TriggerGearShiftConfig
 {
-    [Ui("On R2")] public bool Throttle { get; set; } = true;
-    [Ui("On L2")] public bool Brake { get; set; } = true;
+    [JsonIgnore] public bool Throttle { get; set; } = false;
+    [JsonIgnore] public bool Brake { get; set; } = false;
+    [Ui("R2 upshift")] public bool ThrottleUpshift { get; set; } = true;
+    [Ui("R2 downshift")] public bool ThrottleDownshift { get; set; } = true;
+    [Ui("L2 upshift")] public bool BrakeUpshift { get; set; } = false;
+    [Ui("L2 downshift")] public bool BrakeDownshift { get; set; } = true;
     [Ui("Frequency, Hz", 0, 255, 1)] public int Freq { get; set; } = 20;
-    [Ui("Strength", 0, 255, 1)] public int Amp { get; set; } = 100;
-    [Ui("Duration, ms", 0, 500, 5)] public float DurationMs { get; set; } = 60f;
+    [Ui("Strength", 0, 1, 0.01)] public float Amp { get; set; } = 1.0f;
+    [Ui("Duration, ms", 0, 500, 5)] public float DurationMs { get; set; } = 300f;
+    [Ui("Attack, ms", 0, 500, 5)] public float AttackMs { get; set; } = 50f;
+    [Ui("Release, ms", 0, 500, 5)] public float ReleaseMs { get; set; } = 50f;
 }
-
-[UiGroup("Released trigger", UiTabs.Triggers, Tip = "Light vibration from road texture (FH6 vibration must be enabled) and rumble strips")]
+[UiGroup("Optional road cues", UiTabs.Triggers, Tip = "Road texture and rumble-strip cues require an engaged pedal")]
 public sealed class TriggerSurfaceConfig
 {
-    [Ui("On R2")] public bool Throttle { get; set; } = true;
-    [Ui("On L2")] public bool Brake { get; set; } = true;
+    [Ui("On R2")] public bool Throttle { get; set; } = false;
+    [Ui("On L2")] public bool Brake { get; set; } = false;
     [Ui("Road: frequency, Hz", 0, 255, 1)] public int Freq { get; set; } = 10;
-    [Ui("Road: strength", 0, 255, 1)] public int Amp { get; set; } = 10;
+    [Ui("Road: strength", 0, 1, 0.01)] public float Amp { get; set; } = 0.125f;
     [Ui("Rumble strip: frequency, Hz", 0, 255, 1)] public int StripFreq { get; set; } = 25;
-    [Ui("Rumble strip: strength", 0, 255, 1)] public int StripAmp { get; set; } = 150;
+    [Ui("Rumble strip: strength", 0, 1, 0.01)] public float StripAmp { get; set; } = 0.25f;
 }
 
-[UiGroup("Collision jolt", UiTabs.Triggers, Tip = "Applied to both triggers when striking an object")]
+[UiGroup("Collision jolt", UiTabs.Triggers, Tip = "Optional object-impact cue; each trigger requires an engaged pedal")]
 public sealed class TriggerCollisionConfig
 {
-    [Ui("Enabled")] public bool Enabled { get; set; } = true;
+    [Ui("Enabled")] public bool Enabled { get; set; } = false;
     [Ui("Threshold, m/s", 0, 30, 0.5)] public float ThresholdMps { get; set; } = 3f;
     [Ui("Frequency, Hz", 0, 255, 1)] public int Freq { get; set; } = 40;
-    [Ui("Strength", 0, 255, 1)] public int Amp { get; set; } = 255;
+    [Ui("Strength", 0, 1, 0.01)] public float Amp { get; set; } = 0.25f;
     [Ui("Duration, ms", 0, 500, 5)] public float DurationMs { get; set; } = 150f;
 }

@@ -176,6 +176,27 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task TriggerTestIsExplicitAndExclusiveWithBodyTestAndSimulation()
+    {
+        var engine = new FakeEngineFacade();
+        using var viewModel = CreateViewModel(engine: engine);
+        Assert.False(viewModel.IsTriggerTestEnabled);
+        viewModel.IsTestEnabled = true;
+        viewModel.IsTriggerTestEnabled = true;
+        Assert.False(viewModel.IsTestEnabled);
+        Assert.False(viewModel.IsSimulationEnabled);
+        await viewModel.ApplyModesCommand.ExecuteAsync(null);
+        Assert.True(engine.LastOptions?.TriggerTest);
+        Assert.False(engine.LastOptions?.Test);
+        Assert.False(engine.LastOptions?.Simulate);
+        viewModel.IsSimulationEnabled = true;
+        Assert.False(viewModel.IsTriggerTestEnabled);
+        viewModel.IsTriggerTestEnabled = true;
+        viewModel.IsTestEnabled = true;
+        Assert.False(viewModel.IsTriggerTestEnabled);
+    }
+
+    [Fact]
     public void ControllerStatusTracksConnectionWhileEngineIsStopped()
     {
         var controller = new FakeControllerService { Snapshot = Connected(ControllerTransport.Bluetooth, 65) };

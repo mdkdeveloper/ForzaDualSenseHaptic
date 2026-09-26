@@ -5,6 +5,7 @@ using ForzaHaptics.Output;
 using ForzaHaptics.Telemetry;
 using ForzaHaptics.Triggers;
 using ForzaHaptics.Util;
+using ForzaHaptics.Controllers;
 
 namespace ForzaHaptics;
 
@@ -13,6 +14,7 @@ public sealed record EngineOptions
 {
     public bool Simulate { get; init; }
     public bool Test { get; init; }
+    public bool TriggerTest { get; init; }
     public string? ReplayPath { get; init; }
     public string? RecordPath { get; init; }
     public int? Port { get; init; }
@@ -28,6 +30,9 @@ public sealed record EngineOptions
 public sealed class HapticEngine : IDisposable
 {
     private readonly Func<AppConfig> _config;
+    private readonly Func<long>? _configRevision;
+    private readonly Func<ControllerSnapshot>? _controllerInput;
+    private ControllerService? _ownedController;
     private readonly object _sync = new();
 
     private EngineOptions _options = new();
@@ -40,12 +45,16 @@ public sealed class HapticEngine : IDisposable
     private TelemetryRecorder? _recorder;
     private CancellationTokenSource? _cts;
     private Thread? _feeder;
+    private Thread? _triggerLoop;
+    private TriggerRuntime? _triggerRuntime;
     private int _port;
     private double _simStart;
 
-    public HapticEngine(Func<AppConfig> config)
+    public HapticEngine(Func<AppConfig> config, Func<long>? configRevision = null, Func<ControllerSnapshot>? controllerInput = null)
     {
         _config = config;
+        _configRevision = configRevision;
+        _controllerInput = controllerInput;
     }
 
     public bool IsRunning { get; private set; }
@@ -69,7 +78,7 @@ public sealed class HapticEngine : IDisposable
             var cfg = _config();
 
             var bus = new HapticBus();
-            var processor = new TelemetryProcessor(bus, _config);
+            var processor = new TelemetryProcessor(bus, _config, _configRevision);
             _bus = bus;
             _synth = null;
             _test = null;
@@ -88,6 +97,13 @@ public sealed class HapticEngine : IDisposable
 
             _triggers = options.Test ? null : TriggerOutput.Create(cfg, bus, _output is BluetoothHidOutput, activeDeviceId);
             if (_triggers != null) Log.Ok("Triggers: " + _triggers.Description);
+            if (_triggers != null)
+            {
+                ActiveControllerDeviceId = _triggers.DeviceId;
+                if (_controllerInput == null)
+                    _ownedController ??= new ControllerService(() => _config().Output, () => ActiveControllerDeviceId);
+                _triggerRuntime = new TriggerRuntime(bus, _config, _configRevision);
+            }
 
             _cts = new CancellationTokenSource();
             _port = options.Port ?? cfg.Port;
@@ -104,6 +120,11 @@ public sealed class HapticEngine : IDisposable
                 if (options.Test)
                 {
                     Log.Info("Motor test: left → right → 20–400 Hz sweep → pulses (8-second cycle).");
+                }
+                else if (options.TriggerTest)
+                {
+                    Log.Info("Gear-only trigger test (12 seconds, current profile): hold physical L2/R2; " +
+                        "0–2s free, upshifts at 2/6/10s, downshifts at 4/8s, then Off. No slip, road, collision or body effects. Channel and gear switches must be enabled.");
                 }
                 else if (options.ReplayPath != null)
                 {
@@ -143,6 +164,8 @@ public sealed class HapticEngine : IDisposable
                 }
 
                 _output.Start();
+                if (_triggerRuntime != null)
+                    _triggerLoop = StartTriggerLoop(_triggerRuntime, bus, _cts.Token, options.TriggerTest);
                 _triggers?.Start();
                 IsRunning = true;
                 return true;
@@ -170,6 +193,9 @@ public sealed class HapticEngine : IDisposable
         _receiver = null;
         _feeder?.Join(1000);
         _feeder = null;
+        _triggerLoop?.Join(1000);
+        _triggerLoop = null;
+        _triggerRuntime = null;
         _triggers?.Dispose(); // releases the triggers
         _triggers = null;
         _output?.Dispose();
@@ -194,32 +220,31 @@ public sealed class HapticEngine : IDisposable
 
         string health = string.Join(" | ", new[] { _output.Health, _triggers?.Health ?? "" }.Where(h => h.Length > 0));
         string tail = health.Length > 0 ? " | " + health : "";
+        if (_triggers != null)
+            tail += " | " + (_controllerInput?.Invoke() ?? _ownedController?.Snapshot ?? ControllerSnapshot.Disconnected).TriggerFeedbackText;
 
         if (_test != null) return $"TEST: {_test.Step}{tail}";
+        if (_options.TriggerTest)
+            return $"GEAR-ONLY TEST {(Clock.Now - _simStart < 12 ? "running" : "complete; restart to repeat")} | command {_bus.Triggers} | {_triggerRuntime?.Status}{tail}";
 
-        string meters = _synth != null ? $"L {_synth.Meters.PeakL:0.00} R {_synth.Meters.PeakR:0.00}" : "";
-        var s = _bus.Status;
-        double age = Clock.Now - s.LastPacketTime;
-
-        string line;
-        if (age > 2.0)
-        {
-            line = _options.ReplayPath != null ? "Pausing between recording loops..." : $"Waiting for telemetry on UDP port {_port}...";
-        }
-        else if (!s.RaceOn)
-        {
-            line = $"FH6: menu or paused | {meters}";
-        }
-        else
-        {
-            string active = _synth?.Meters.Active ?? "";
-            line = $"{s.PacketsPerSecond,3:0} pkt/s | {s.SpeedKmh,3:0} km/h | {s.Rpm,5:0} rpm | gear {s.Gear} | " +
-                   $"surface {s.SurfaceRumble:0.00} | {meters}" + (active.Length > 0 ? " | " + active : "") +
-                   (_triggers != null ? " | " + _bus.Triggers : "");
-        }
+        string meters = _synth != null ? $"signal peaks L {_synth.Meters.PeakL:0.00} R {_synth.Meters.PeakR:0.00}" : "";
+        string line = FormatTelemetryStatus(_bus.Status, Clock.Now, meters, _synth?.Meters.Active ?? "",
+            _triggers != null ? _bus.Triggers.ToString() : "", _port, _options.ReplayPath != null);
 
         if (_options.Simulate) line = $"[{DrivingSimulator.DescribePhase(Clock.Now - _simStart)}] " + line;
-        return line + tail;
+        return line + (_triggerRuntime != null ? " | " + _triggerRuntime.Status : "") + tail;
+    }
+
+    internal static string FormatTelemetryStatus(TelemetryStatus status, double now, string meters,
+        string active, string triggerState, int port, bool replay)
+    {
+        if (now - status.LastPacketTime >= TelemetryProcessor.TimeoutSeconds)
+            return replay ? "Telemetry stale: waiting for the next recording frame..."
+                : $"Telemetry stale: waiting on UDP port {port}...";
+        if (!status.RaceOn) return $"FH6: menu or paused | {meters}";
+        return $"{status.PacketsPerSecond,3:0} pkt/s | {status.SpeedKmh,3:0} km/h | {status.Rpm,5:0} rpm | gear {status.Gear} | " +
+               $"surface {status.SurfaceRumble:0.00} | {meters}" + (active.Length > 0 ? " | " + active : "") +
+               (triggerState.Length > 0 ? " | command " + triggerState : "");
     }
 
     private static Thread StartSimulator(int port, CancellationToken token, out double startTime)
@@ -271,6 +296,7 @@ public sealed class HapticEngine : IDisposable
                         processor.CheckTimeout(Clock.Now);
                     }
                     if (ForzaPacket.TryParse(data, out var packet)) processor.Process(packet, Clock.Now);
+                    processor.CheckTimeout(Clock.Now);
                 }
                 start = Clock.Now + 1.0; // one second of silence between loops
             }
@@ -283,5 +309,52 @@ public sealed class HapticEngine : IDisposable
         return thread;
     }
 
-    public void Dispose() => Stop();
+    // Only the gear changes: the manual test cannot produce slip, road or collision cues.
+    internal static ForzaPacket CreateTriggerTestPacket(double age) => new()
+    {
+        IsRaceOn = true, TimestampMs = (uint)(age * 1000), Speed = 20,
+        Gear = (byte)(((int)(age / 2) % 2 == 0) ? 2 : 3), DrivetrainType = 2,
+    };
+
+    private Thread StartTriggerLoop(TriggerRuntime runtime, HapticBus bus, CancellationToken token, bool manualTest)
+    {
+        double start = Clock.Now;
+        var thread = new Thread(() =>
+        {
+            double next = Clock.Now;
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    double now = Clock.Now;
+                    if (manualTest && now - start < 12)
+                    {
+                        double age = now - start;
+                        bus.PublishTriggerTelemetry(CreateTriggerTestPacket(age), now);
+                    }
+                    if (manualTest && now - start >= 12)
+                        bus.PublishTriggers(TriggerPair.Off, bus.ResetGeneration);
+                    else
+                        runtime.Step(now, Environment.TickCount64,
+                            _controllerInput?.Invoke() ?? _ownedController?.Snapshot ?? ControllerSnapshot.Disconnected,
+                            ActiveControllerDeviceId);
+                    next += 0.01;
+                    double wait = next - Clock.Now;
+                    if (wait > 0) token.WaitHandle.WaitOne(TimeSpan.FromSeconds(wait));
+                    else if (wait < -0.1) next = Clock.Now;
+                }
+            }
+            catch (Exception ex) { Log.Error("Trigger control stopped: " + ex.Message); }
+            finally { bus.PublishTriggers(TriggerPair.Off, bus.ResetGeneration); }
+        }) { IsBackground = true, Name = "Physical trigger control" };
+        thread.Start();
+        return thread;
+    }
+
+    public void Dispose()
+    {
+        Stop();
+        _ownedController?.Dispose();
+        _ownedController = null;
+    }
 }

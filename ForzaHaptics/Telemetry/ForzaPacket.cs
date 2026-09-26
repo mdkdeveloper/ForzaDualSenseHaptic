@@ -38,6 +38,7 @@ public struct Wheels
     public readonly bool Any(int side) => side == 0 ? (FL != 0f || RL != 0f) : (FR != 0f || RR != 0f);
 
     public readonly float Max() => MathF.Max(MathF.Max(FL, FR), MathF.Max(RL, RR));
+    public readonly bool IsFinite => float.IsFinite(FL) && float.IsFinite(FR) && float.IsFinite(RL) && float.IsFinite(RR);
 }
 
 /// <summary>
@@ -147,11 +148,13 @@ public sealed class ForzaPacket
     public float SpeedKmh => Speed * 3.6f;
     public float Throttle01 => Accel / 255f;
     public float Brake01 => Brake / 255f;
+    // All packet members are value types; detach the publication from callers that reuse a frame.
+    internal ForzaPacket CopyForTriggers() => (ForzaPacket)MemberwiseClone();
 
     public static bool TryParse(ReadOnlySpan<byte> d, out ForzaPacket packet)
     {
         packet = new ForzaPacket();
-        if (d.Length < MinSize) return false;
+        if (d.Length != MinSize && d.Length != Size) return false;
 
         var p = packet;
         p.IsRaceOn = I32(d, ForzaOffsets.IsRaceOn) != 0;
@@ -206,9 +209,18 @@ public sealed class ForzaPacket
         p.NormalizedAIBrakeDifference = unchecked((sbyte)d[ForzaOffsets.NormalizedAIBrakeDifference]);
 
         // Reject garbage data: NaN/Infinity in key fields.
-        if (!float.IsFinite(p.Speed) || !float.IsFinite(p.CurrentEngineRpm)) return false;
-        return true;
+        return p.HasFiniteFeedbackValues;
     }
+
+    /// <summary>Validate every float consumed by feedback or status, including direct simulator input.</summary>
+    public bool HasFiniteFeedbackValues =>
+        float.IsFinite(Speed) && float.IsFinite(SpeedKmh) && float.IsFinite(EngineMaxRpm)
+        && float.IsFinite(EngineIdleRpm) && float.IsFinite(CurrentEngineRpm)
+        && float.IsFinite(Acceleration.X) && float.IsFinite(Acceleration.Y) && float.IsFinite(Acceleration.Z)
+        && float.IsFinite(Velocity.Z)
+        && NormalizedSuspensionTravel.IsFinite && TireSlipRatio.IsFinite && TireSlipAngle.IsFinite && WheelOnRumbleStrip.IsFinite
+        && WheelInPuddle.IsFinite && SurfaceRumble.IsFinite && TireCombinedSlip.IsFinite
+        && SuspensionTravelMeters.IsFinite && float.IsFinite(SmashableVelDiff) && float.IsFinite(Boost);
 
     /// <summary>Serializes to a 324-byte packet for the simulator and tests.</summary>
     public byte[] ToBytes()

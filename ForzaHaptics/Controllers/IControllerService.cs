@@ -14,6 +14,18 @@ public sealed record ControllerSnapshot
     public int? BatteryPercent { get; init; }
     public bool IsCharging { get; init; }
     public bool CanDisconnect { get; init; }
+    public ControllerTriggerFeedback? TriggerFeedback { get; init; }
+    public long LastInputTick { get; init; }
+    public byte LeftTrigger { get; init; }
+    public byte RightTrigger { get; init; }
+    public bool IsInputFreshAt(long nowTick) => IsConnected && LastInputTick > 0 &&
+        nowTick - LastInputTick is >= 0 and <= 300;
+    public bool IsInputFresh => IsInputFreshAt(Environment.TickCount64);
+    public string PhysicalTriggerText => IsInputFresh
+        ? $"physical L2 {LeftTrigger}/255 / R2 {RightTrigger}/255" : "physical L2/R2: unavailable";
+    public string TriggerFeedbackText => !IsInputFresh || TriggerFeedback is null
+        ? "controller reported: unavailable"
+        : $"controller reported: {TriggerFeedback}";
 }
 
 public interface IControllerService : IDisposable
@@ -62,5 +74,48 @@ public static class DualSenseBatteryParser
             crc ^= value;
             for (int bit = 0; bit < 8; bit++) crc = (crc & 1) != 0 ? (crc >> 1) ^ 0xEDB88320 : crc >> 1;
         }
+    }
+}
+
+/// <summary>Reported firmware mode and motor state; neither measured force nor acknowledgement of a particular write.</summary>
+public sealed record ControllerTriggerFeedback(byte LeftEffect, byte RightEffect, byte LeftStatus, byte RightStatus)
+{
+    public override string ToString() => $"L2 {Describe(LeftEffect, LeftStatus)} / R2 {Describe(RightEffect, RightStatus)}";
+    private static string Describe(byte effect, byte status)
+    {
+        string mode = effect switch { 0 => "off/other", 1 => "feedback", 2 => "weapon", 3 => "vibration", _ => $"unknown(0x{effect:X})" };
+        return $"{mode} state=0x{status:X}";
+    }
+}
+
+public static class DualSenseTriggerFeedbackParser
+{
+    // Common-input offsets from https://github.com/SpecialKO/XInput_HID/blob/master/dualsense.cpp
+    // Trigger status: 41/42 high nibble. Active effect: 47, right low/left high nibble.
+    public static bool TryParse(ReadOnlySpan<byte> report, ControllerTransport transport, out ControllerTriggerFeedback? feedback)
+    {
+        feedback = null;
+        // Reuse strict length/ID/transport checks and the Bluetooth input CRC (USB has no report CRC).
+        if (!DualSenseBatteryParser.TryParse(report, transport, out _, out _)) return false;
+        int common = transport == ControllerTransport.Bluetooth ? 2 : 1;
+        byte effects = report[common + 47];
+        feedback = new ControllerTriggerFeedback((byte)(effects >> 4), (byte)(effects & 15),
+            (byte)(report[common + 42] >> 4), (byte)(report[common + 41] >> 4));
+        return true;
+    }
+}
+
+/// <summary>Physical trigger travel from validated full input reports; never inferred from telemetry.</summary>
+public static class DualSensePhysicalInputParser
+{
+    public static bool TryParse(ReadOnlySpan<byte> report, ControllerTransport transport,
+        out byte leftTrigger, out byte rightTrigger)
+    {
+        leftTrigger = rightTrigger = 0;
+        if (!DualSenseBatteryParser.TryParse(report, transport, out _, out _)) return false;
+        int common = transport == ControllerTransport.Bluetooth ? 2 : 1;
+        leftTrigger = report[common + 4];
+        rightTrigger = report[common + 5];
+        return true;
     }
 }

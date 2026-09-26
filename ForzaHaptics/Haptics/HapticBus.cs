@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ForzaHaptics.Triggers;
+using ForzaHaptics.Telemetry;
 
 namespace ForzaHaptics.Haptics;
 
@@ -32,7 +33,11 @@ public enum KickKind
 }
 
 /// <summary>A short decaying impulse: suspension impact, gear shift, collision, or splash.</summary>
-public readonly record struct HapticKick(float AmpL, float AmpR, float FreqHz, float DecaySec, KickKind Kind);
+public readonly record struct HapticKick(float AmpL, float AmpR, float FreqHz, float DecaySec, KickKind Kind)
+{
+    public long Generation { get; init; }
+    public string EffectName { get; init; } = "impulse";
+}
 
 /// <summary>State snapshot for the status line.</summary>
 public sealed record TelemetryStatus(
@@ -54,7 +59,67 @@ public sealed record TelemetryStatus(
 /// </summary>
 public sealed class HapticBus
 {
-    private HapticTargets _targets = HapticTargets.Silent;
+    internal sealed record TriggerFrame(ForzaPacket Packet, double Time, long Generation, long Sequence);
+    internal readonly ConcurrentQueue<TriggerFrame> TriggerFrames = new();
+    private readonly object _triggerSync = new();
+    private long _triggerSequence;
+    internal void PublishTriggerTelemetry(ForzaPacket packet, double now)
+    {
+        lock (_triggerSync)
+        {
+            // Bound memory if triggers are disabled. A sequence gap resets the consumer's event baseline.
+            if (TriggerFrames.Count >= 256) TriggerFrames.Clear();
+            TriggerFrames.Enqueue(new(packet.CopyForTriggers(), now, ResetGeneration, ++_triggerSequence));
+        }
+    }
+
+    internal bool TryReadTriggerTelemetry(double now, out TriggerFrame frame)
+    {
+        lock (_triggerSync)
+        {
+            // UDP may publish after the consumer sampled its clock. Keep that frame for
+            // the next tick instead of dropping it and creating a sequence gap.
+            if (TriggerFrames.TryPeek(out var next) && next.Time <= now &&
+                TriggerFrames.TryDequeue(out var ready))
+            {
+                frame = ready;
+                return true;
+            }
+            frame = null!;
+            return false;
+        }
+    }
+
+    internal void PublishTriggers(TriggerPair pair, long generation)
+    {
+        lock (_triggerSync)
+            if (ResetGeneration == generation) Triggers = pair;
+    }
+    // One telemetry producer publishes generation and targets together; the audio thread never
+    // observes a completed reset generation paired with the preceding segment's targets.
+    private sealed record EffectSnapshot(long Generation, HapticTargets Targets);
+    private EffectSnapshot _effects = new(0, HapticTargets.Silent);
+    public long ResetGeneration => Volatile.Read(ref _effects).Generation;
+
+    internal HapticTargets ReadTargets(out long generation)
+    {
+        var snapshot = Volatile.Read(ref _effects);
+        generation = snapshot.Generation;
+        return snapshot.Targets;
+    }
+
+    public void ResetEffects()
+    {
+        lock (_triggerSync)
+        {
+            Triggers = TriggerPair.Off;
+            TriggerFrames.Clear();
+            Kicks.Clear();
+            var previous = Volatile.Read(ref _effects);
+            Volatile.Write(ref _effects, new EffectSnapshot(unchecked(previous.Generation + 1), HapticTargets.Silent));
+        }
+    }
+
     private TelemetryStatus _status = TelemetryStatus.Empty;
     private TriggerPair _triggers = TriggerPair.Off;
 
@@ -62,8 +127,12 @@ public sealed class HapticBus
 
     public HapticTargets Targets
     {
-        get => Volatile.Read(ref _targets);
-        set => Volatile.Write(ref _targets, value);
+        get => Volatile.Read(ref _effects).Targets;
+        set
+        {
+            var previous = Volatile.Read(ref _effects);
+            Volatile.Write(ref _effects, new EffectSnapshot(previous.Generation, value));
+        }
     }
 
     public TelemetryStatus Status
@@ -81,6 +150,6 @@ public sealed class HapticBus
 
     public void Kick(HapticKick kick)
     {
-        if (Kicks.Count < 64) Kicks.Enqueue(kick);
+        if (Kicks.Count < 64) Kicks.Enqueue(kick with { Generation = ResetGeneration });
     }
 }

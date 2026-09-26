@@ -53,6 +53,7 @@ public sealed class UdpTelemetryReceiver : IDisposable
 
         _udp = new UdpClient(AddressFamily.InterNetwork);
         _udp.Client.Bind(new IPEndPoint(IPAddress.Any, port)); // SocketException if the port is busy
+        Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
         _udp.Client.ReceiveTimeout = 100;
 
         _thread = new Thread(Loop) { IsBackground = true, Name = "FH6 telemetry", Priority = ThreadPriority.AboveNormal };
@@ -64,57 +65,71 @@ public sealed class UdpTelemetryReceiver : IDisposable
         var remote = new IPEndPoint(IPAddress.Any, 0);
         while (_running)
         {
-            byte[] data;
             try
             {
-                data = _udp.Receive(ref remote);
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
-            {
-                _onIdle();
-                continue;
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
-            {
-                continue; // Windows: ICMP "port unreachable" from a previous send
-            }
-            catch (ObjectDisposedException)
-            {
-                break;
-            }
-            catch (SocketException ex)
-            {
-                if (!_running) break;
-                Log.Warn($"UDP: {ex.Message}");
-                continue;
-            }
-
-            if (_forwarder != null)
-            {
-                foreach (var target in _forwardTargets)
-                {
-                    try { _forwarder.Send(data, data.Length, target); } catch { /* the other application is not listening; harmless */ }
-                }
-            }
-
-            _recorder?.Write(data);
-
-            if (ForzaPacket.TryParse(data, out var packet))
-            {
-                Interlocked.Increment(ref _received);
+                byte[] data;
                 try
                 {
-                    _onPacket(packet);
+                    data = _udp.Receive(ref remote);
                 }
-                catch (Exception ex)
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
-                    Log.Error($"Packet processing error: {ex.Message}");
+                    continue;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    continue; // Windows: ICMP "port unreachable" from a previous send
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+                catch (SocketException ex)
+                {
+                    if (!_running) break;
+                    Log.Warn($"UDP: {ex.Message}");
+                    continue;
+                }
+
+                if (_forwarder != null)
+                {
+                    foreach (var target in _forwardTargets)
+                    {
+                        try { _forwarder.Send(data, data.Length, target); } catch { /* the other application is not listening; harmless */ }
+                    }
+                }
+
+                _recorder?.Write(data);
+
+                if (ForzaPacket.TryParse(data, out var packet))
+                {
+                    Interlocked.Increment(ref _received);
+                    try
+                    {
+                        _onPacket(packet);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"Packet processing error: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    if (Interlocked.Increment(ref _invalid) == 1)
+                        Log.Warn($"Received a {data.Length}-byte packet from {remote}; invalid FH6 telemetry (expected {ForzaPacket.MinSize} or {ForzaPacket.Size} bytes and finite feedback values).");
                 }
             }
-            else
+            catch (Exception ex)
             {
-                if (Interlocked.Increment(ref _invalid) == 1)
-                    Log.Warn($"Received a {data.Length}-byte packet from {remote}; this is not the FH6 format (expected {ForzaPacket.Size}).");
+                if (_running) Log.Error("Telemetry receive error: " + ex.Message);
+            }
+            finally
+            {
+                if (_running)
+                {
+                    try { _onIdle(); }
+                    catch (Exception ex) { Log.Error($"Telemetry watchdog error: {ex.Message}"); }
+                }
             }
         }
     }

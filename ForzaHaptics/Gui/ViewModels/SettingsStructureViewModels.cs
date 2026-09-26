@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace ForzaHaptics.Gui.ViewModels;
 
-public sealed class SettingsTabViewModel
+public sealed class SettingsTabViewModel : ObservableObject
 {
     private readonly ObservableCollection<SettingsGroupViewModel> _groups = new();
 

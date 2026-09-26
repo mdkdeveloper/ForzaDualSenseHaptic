@@ -26,6 +26,17 @@ public sealed class SettingsViewModelTests
     }
 
     [Fact]
+    public void TriggerSettingsExposeVibrationWithoutResistanceCurveControls()
+    {
+        var settings = new SettingsViewModel(new AppConfig());
+        var fields = Tab(settings, UiTabs.Triggers).Groups.SelectMany(group => group.Fields).ToArray();
+        foreach (string obsolete in new[] { "ResistanceEnabled", "MinResistance", "MaxResistance", "StartZone", "ResistanceSource" })
+            Assert.DoesNotContain(fields, field => field.PropertyName == obsolete);
+        Assert.Contains(fields, field => field.PropertyName == nameof(ThrottleTriggerConfig.SlipEnabled));
+        Assert.Contains(fields, field => field.PropertyName == nameof(ThrottleTriggerConfig.LateralSlipEnabled));
+    }
+
+    [Fact]
     public void BuildsTabsGroupsAndEverySupportedEditorType()
     {
         var settings = new SettingsViewModel(new AppConfig());
@@ -48,7 +59,7 @@ public sealed class SettingsViewModelTests
         Assert.IsType<BoolSettingFieldViewModel>(
             Field(settings, "Strength and frequencies", nameof(AppConfig.SwapLeftRight)));
         Assert.IsType<ChoiceSettingFieldViewModel>(
-            Field(settings, "R2 — throttle", nameof(ThrottleTriggerConfig.Mode)));
+            Field(settings, "R2 — throttle", nameof(ThrottleTriggerConfig.SlipMode)));
     }
 
     [Fact]
@@ -58,16 +69,16 @@ public sealed class SettingsViewModelTests
         var output = Assert.IsType<ChoiceSettingFieldViewModel>(
             Field(settings, "Connection", nameof(AppConfig.Output)));
         var triggerMode = Assert.IsType<ChoiceSettingFieldViewModel>(
-            Field(settings, "R2 — throttle", nameof(ThrottleTriggerConfig.Mode)));
+            Field(settings, "R2 — throttle", nameof(ThrottleTriggerConfig.SlipMode)));
 
         Assert.Equal(new[] { "auto", "usb", "bt" }, output.Choices);
-        Assert.Equal(new[] { "Off", "Resistance", "Vibration" }, triggerMode.Choices);
+        Assert.Equal(new[] { "Continuous", "Repeated" }, triggerMode.Choices);
 
         output.SelectedValue = "bt";
-        triggerMode.SelectedValue = "Resistance";
+        triggerMode.SelectedValue = "Repeated";
 
         Assert.Equal("bt", settings.Working.Output);
-        Assert.Equal(TriggerMode.Resistance, settings.Working.Triggers.Throttle.Mode);
+        Assert.Equal(TriggerSlipMode.Repeated, settings.Working.Triggers.Throttle.SlipMode);
         Assert.True(settings.IsDirty);
     }
 

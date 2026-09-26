@@ -22,8 +22,9 @@ public sealed class HapticEngineFacade : IHapticEngineFacade
 {
     private readonly HapticEngine _engine;
 
-    public HapticEngineFacade(Func<AppConfig> config)
-        : this(new HapticEngine(config))
+    public HapticEngineFacade(Func<AppConfig> config, Func<long>? configRevision = null,
+        Func<Controllers.ControllerSnapshot>? controllerInput = null)
+        : this(new HapticEngine(config, configRevision, controllerInput))
     {
     }
 

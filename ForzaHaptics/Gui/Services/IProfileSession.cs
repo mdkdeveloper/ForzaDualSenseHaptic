@@ -8,6 +8,7 @@ public interface IProfileSession : IDisposable
     bool IsReadOnly => ProfileStore.IsDefault(ActiveProfile);
     string ProfileDirectory { get; }
     AppConfig Current { get; }
+    long Revision => 0;
 
     event EventHandler? ReloadedFromDisk;
 
@@ -43,6 +44,7 @@ public sealed class ProfileSession : IProfileSession
     public string ActiveProfile { get; private set; }
     public string ProfileDirectory => _store.Directory;
     public AppConfig Current => _config.Current;
+    public long Revision => _config.Revision;
     public bool IsReadOnly => _config.IsReadOnly;
 
     public event EventHandler? ReloadedFromDisk;

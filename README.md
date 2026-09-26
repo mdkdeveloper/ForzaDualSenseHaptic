@@ -8,7 +8,7 @@ DSX and DualSenseY are not required: DualSense haptics are driven by an ordinary
 
 ```text
 FH6 ──UDP, 324 bytes per frame──▶ TelemetryProcessor ──▶ HapticBus ──▶ HapticSynth ──▶ USB: WASAPI, channels 3–4 (48 kHz)
-                                      (60–144 Hz: effect   (targets +     (48 kHz / 3 kHz,   BT: HID report 0x32 (3 kHz, experimental)
+                                      (game FPS: effect   (targets +     (48 kHz / 3 kHz,   BT: HID report 0x32 (3 kHz, experimental)
                                        levels + impulses)  queue)         smooth interpolation)
 ```
 
@@ -19,7 +19,7 @@ FH6 ──UDP, 324 bytes per frame──▶ TelemetryProcessor ──▶ HapticB
 | Road texture | `SurfaceRumble` + speed | 70–190 Hz noise that grows with speed, calculated separately for the left and right sides |
 | Rumble strips | `WheelOnRumbleStrip` | Pulses at a frequency derived from *speed / rumble-strip spacing* |
 | Potholes, joints, and landings | Suspension travel velocity (`SuspensionTravelMeters`) | An 85 Hz thump whose strength follows compression velocity |
-| Oversteer / understeer | `TireCombinedSlip` > 1 | Irregular scraping |
+| Combined grip loss | `TireCombinedSlip` > 1 | Irregular scraping |
 | Wheelspin | `TireSlipRatio` under throttle | 150 Hz buzzing |
 | Wheel lock | `TireSlipRatio` under braking | 14 Hz pulses on a 150 Hz carrier, similar to ABS |
 | Engine and rev limiter | RPM and throttle | A subtle 55–190 Hz tone with stuttering at the limiter |
@@ -29,21 +29,26 @@ FH6 ──UDP, 324 bytes per frame──▶ TelemetryProcessor ──▶ HapticB
 
 ### L2/R2 adaptive triggers
 
-The trigger logic is based on [HorizonHaptics](https://github.com/haritha99ch/HorizonHaptics). Its settings are available in the **Triggers** section of the application's left navigation, under the `"Triggers"` section of the profile file.
+The **Triggers** tab controls vibration events. There is no background resistance curve: triggers are free between events and immediately released when the physical pedal is released.
 
-| Trigger | Condition | Feedback |
-|---|---|---|
-| L2 | Braking | Resistance from 0 to 7, increasing with pedal pressure |
-| L2 | Handbrake | A hard wall |
-| L2 | ABS (slip while braking) | Springy upper zones (`AbsWallStrength`) and lower zones pulsing at 20–40 Hz |
-| R2 | Acceleration | Light resistance from acceleration, with an additional turbo contribution |
-| R2 | Wheelspin / sliding under throttle | A soft 30–60 Hz buzz that ramps up over 200 ms; strength is controlled by `VibAmpMin..VibAmpMax` |
-| Both | Gear shift or impact with an object | A short impulse |
-| Both | Trigger released | Rumble strips and road texture |
+| Trigger/effect | Factory behavior before intensity/scaling |
+|---|---|
+| Overall | Global strength 0.65; each channel intensity 0.7 |
+| Gear shift | R2 up/down; L2 down only; 20 Hz, amplitude 1.0, 300 ms with 50 ms attack/release |
+| R2 slip | Driven-wheel longitudinal slip plus inferred lateral slip; 30–45 Hz, amplitude 0.35–0.5 |
+| L2 slip | Inferred braking slip; 25–35 Hz, amplitude 0.35–0.5 |
+| Slip pattern | Continuous by default; optional repeated 250 ms bursts / 250 ms gaps, 80 ms attack/release |
+| Optional road/collision | Disabled in new profiles; can be enabled independently |
 
-`"Mode": "Resistance"` provides resistance without vibration. `"Off"` leaves the trigger free.
+Cues require physical HID travel above 20/255 and stop at 10/255 or less. Releasing a trigger cancels its cue and sends Off. A pause, stale telemetry/input (300 ms), disconnected/wrong device or Stop disables both triggers. Longitudinal slip uses drivetrain-aware TireSlipRatio; lateral slip uses TireSlipAngle and is an inference, not a confirmed oversteer state. Braking suppresses R2 wheelspin but not lateral slip.
 
-`"Strength"` (default: 0.65) scales all trigger effects together to reduce load on the mechanism. `"Hysteresis"` makes the exit threshold lower than the entry threshold and prevents resistance and vibration frequency from jumping in response to tiny fluctuations, so the trigger does not chatter around a boundary. `--render` reports how many times the trigger state changed; every change writes a new state to the controller.
+Gear changes have priority over collision, slip and road cues. A 50 ms transition fades the old effect to zero; the shift envelope starts afterward; the trigger returns to Off or the currently eligible lower-priority vibration. Pending shifts older than 150 ms are discarded and new shifts never extend an active pulse. Production trigger output uses only Off and Vibration. Repeated-slip gaps use zero vibration output.
+
+Physical input and accepted telemetry feed one 100 Hz trigger clock. Changed output reports are coalesced to at most 20 Hz; duplicate reports are suppressed. Emergency Off bypasses the interval. Vibration frequency, report rate and mechanical cycles are different quantities. Strength remains an editable multiplier, not a certified force or lifetime limit.
+
+Old profiles migrate in memory to **version 4**. Resistance fields are removed regardless of their old enabled state. Slip and event permissions, amplitudes and frequencies are preserved. Old explicit events are no longer blocked by the former Resistance mode. Save explicitly to write the upgraded JSON; build/publish never overwrites an existing profile.
+
+**Gear trigger test** (GUI or `--trigger-test`) is separate from Motor test: for 12 seconds the current profile starts with free triggers, then upshifts at 2/6/10 seconds and downshifts at 4/8 seconds, then releases both triggers. No slip, road or collision signals are generated. Leave each channel master enabled and select the desired gear directions. For gear-only driving, disable Wheelspin, Lateral slip and Braking slip separately; these switches never disable gear cues. Hold the relevant trigger to feel cues; body output remains silent. The display distinguishes desired effects, successful OS HID writes, and firmware-reported mode. The latter is not a physical force measurement. Offline WAV rendering has no physical input and does not simulate trigger events.
 
 ## Requirements
 
@@ -93,6 +98,7 @@ ForzaHaptics [options]
   --console           run without a window: receive FH6 telemetry and drive haptics
   --simulate          use the synthetic drive instead of the game
   --test              test the haptic actuators
+  --trigger-test      manual 12-second test of gear cues only
   --record FILE       record telemetry to a file while playing
   --replay FILE       replay a recording in a loop for tuning without the game
   --render FILE.wav   render offline to WAV without a controller (simulation or --replay)
@@ -107,14 +113,14 @@ All settings are available in the window; editable profiles also have a correspo
 Tuning tips:
 
 - The status bar displays `surface 0.xx`, the raw `SurfaceRumble` value from the game. Drive on asphalt and dirt, compare the values, then adjust `Road.SurfaceScale` so dirt feels noticeably stronger than asphalt.
-- `L 0.xx R 0.xx` shows peak actuator levels. Adjust overall strength with `Dynamics.Makeup` or `MasterGain`. Peaks near 1.0 are normal: the output stage includes a compressor and soft limiter, so impacts are not hard-clipped.
+- `L 0.xx R 0.xx` shows synthesized signal peaks, not measured actuator force. Adjust overall strength with `Dynamics.Makeup` or `MasterGain`. Peaks near 1.0 are normal: the output stage includes a compressor and soft limiter, so impacts are not hard-clipped.
 - Record a drive with `--record lap.fhrec`, then tune against `--replay lap.fhrec` without playing. `--render lap.wav --replay lap.fhrec` produces a WAV whose left and right channels correspond to the two actuators, making the signal easy to inspect in Audacity.
 - DualSense uses voice-coil actuators rather than eccentric rotating masses. Frequencies below roughly 60 Hz are barely perceptible, the strongest range is about 100–250 Hz, and frequencies above 350 Hz begin to squeal. Effect carriers therefore sit in the useful range, while low-frequency rhythms such as rumble strips and ABS modulate their amplitude. The output is constrained by the `LowCutHz..HighCutHz` band-pass filter.
 - `--test` sweeps from 20 to 400 Hz. Note where vibration feels strongest and, if necessary, move effect `FreqHz` values toward that range.
 
 ## Compatibility and troubleshooting
 
-- **DSX / DualSenseY:** Disable *Audio to Haptics* or *Audio passthrough* to prevent mixed signals over USB or conflicts over Bluetooth. Gamepad emulation and adaptive triggers may remain enabled.
+- **DSX / DualSenseY:** Disable *Audio to Haptics* or *Audio passthrough* to prevent mixed signals over USB or conflicts over Bluetooth. Gamepad emulation may remain enabled, but disable competing adaptive-trigger effects.
 - **The triggers do not respond:** Steam Input, DS4Windows, or DSX may overwrite trigger effects; disable trigger effects in those applications. If ForzaHaptics cannot open the HID device, it displays a warning and continues with haptics only.
 - **The game's own vibration:** Steam Input can emulate rumble on the DualSense actuators. If the combined effects become muddy, disable vibration in the game or in Steam's controller settings.
 - **Only one application can listen on a UDP port:** To run another telemetry application in parallel, such as a trigger tool or SimHub, configure it on a different port and add `"ForwardTo": ["127.0.0.1:5300"]`. ForzaHaptics will forward the packets.
@@ -129,7 +135,7 @@ ForzaHaptics/
   Haptics/                         telemetry processing, DSP, impulses, and two-actuator signal synthesis
   Output/                          WASAPI, Bluetooth HID, trigger HID, and WAV output
   Controllers/                     independent HID presence/battery monitoring and Windows Bluetooth disconnect
-  Triggers/                        telemetry-driven L2/R2 processing and trigger-effect encoding
+  Triggers/                        physical input gating, event processing, 100 Hz runtime and effect encoding
   Config/                          profile storage, load/save, hot reload, and live configuration updates
   Gui/App.axaml(.cs)               Avalonia application and Fluent theme bootstrap
   Gui/MainWindow.axaml(.cs)        main Avalonia window and view-specific lifecycle integration
@@ -158,7 +164,3 @@ Hardware diagnostics are opt-in. Set `FORZAHAPTICS_HARDWARE_TEST=1` and `FORZAHA
 - Telemetry format: [Forza Horizon 6 “Data Out” Documentation](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation).
 - Ideas and channel verification: [DualSenseY-v2](https://github.com/WujekFoliarz/DualSenseY-v2) and [HorizonHaptics](https://github.com/haritha99ch/HorizonHaptics).
 - Libraries: [Avalonia](https://avaloniaui.net/), [CommunityToolkit.Mvvm](https://learn.microsoft.com/dotnet/communitytoolkit/mvvm/), [NAudio](https://github.com/naudio/NAudio) (MIT), and [HidSharp](https://www.zer7.com/software/hidsharp) (Apache 2.0).
-
-## Telemetry and haptics audit
-
-See the [Ukrainian telemetry and haptics audit](docs/telemetry-haptics-audit.uk.md) for field mapping, current defaults, protocol findings, and proposed comfort improvements. Effect logic and numerical defaults are unchanged by the profile update; the audit recommendations are not implemented or manufacturer-certified lifetime limits.

@@ -17,57 +17,90 @@ public sealed class EffectCounters
 /// </summary>
 public sealed class TelemetryProcessor
 {
+    public const double TimeoutSeconds = 0.3;
     private const float G = 9.81f;
 
     private readonly HapticBus _bus;
     private readonly Func<AppConfig> _config;
-    private readonly TriggerProcessor _triggers = new();
+    private readonly Func<long> _revision;
+    private long _lastRevision;
+    private uint _lastTimestamp;
+    private int _lastCarOrdinal;
+    private bool _hasTimestamp;
+    private readonly bool[] _contact = new bool[2];
+    private readonly float[] _contactLevel = new float[2];
 
     private ForzaPacket? _prev;
-    private double _prevTime = double.NegativeInfinity;
     private double _lastPacketTime = double.NegativeInfinity;
     private float _avgPacketDt = 1f / 60f;
     private int _prevGear = -1;
     private readonly bool[] _prevWet = new bool[2];
     private double _lastBumpTime = double.NegativeInfinity;
     private double _lastImpactTime = double.NegativeInfinity;
-    private float _lastImpactAmt;
-    private float _prevSmash;
+    private bool _impactArmed = true;
+    private bool _smashArmed = true;
+    private double _lastSmashTime = double.NegativeInfinity;
     private bool _silent = true;
 
     public EffectCounters Counters { get; } = new();
 
-    public TelemetryProcessor(HapticBus bus, Func<AppConfig> config)
+    public TelemetryProcessor(HapticBus bus, Func<AppConfig> config, Func<long>? revision = null)
     {
         _bus = bus;
         _config = config;
+        _revision = revision ?? (() => 0L);
+        _lastRevision = _revision();
     }
 
     public void Process(ForzaPacket p, double now)
     {
-        var c = _config();
-        Counters.Packets++;
-
-        double sinceLast = now - _lastPacketTime;
-        if (sinceLast > 0 && sinceLast < 0.5) _avgPacketDt += ((float)sinceLast - _avgPacketDt) * 0.05f;
-        _lastPacketTime = now;
-
-        _bus.Status = new TelemetryStatus(p.IsRaceOn, p.SpeedKmh, p.CurrentEngineRpm, p.EngineMaxRpm, p.Gear,
-            p.SurfaceRumble.Max(), 1f / MathF.Max(_avgPacketDt, 1e-3f), now);
-        _bus.Triggers = _triggers.Update(p, c.Triggers, now);
-
-        if (!p.IsRaceOn)
+        ObserveRevision();
+        if (!double.IsFinite(now) || !p.HasFiniteFeedbackValues)
         {
-            // menu, pause, replay
-            PublishSilent();
-            _prev = null;
-            _prevGear = -1;
+            CheckTimeout(now);
             return;
         }
 
+        if (!p.IsRaceOn)
+        {
+            Counters.Packets++;
+            _bus.Status = new TelemetryStatus(false, p.SpeedKmh, p.CurrentEngineRpm, p.EngineMaxRpm, p.Gear,
+                p.SurfaceRumble.Max(), 1f / MathF.Max(_avgPacketDt, 1e-3f), now);
+            ResetState();
+            _hasTimestamp = false;
+            return;
+        }
+
+        uint delta = _hasTimestamp ? unchecked(p.TimestampMs - _lastTimestamp) : 0;
+        bool carChanged = _hasTimestamp && p.CarOrdinal != _lastCarOrdinal;
+        bool backwards = _hasTimestamp && delta > int.MaxValue;
+        uint backwardDistance = backwards ? unchecked(_lastTimestamp - p.TimestampMs) : 0;
+        if (_hasTimestamp && !carChanged && (delta == 0 || (backwards && backwardDistance <= 250)))
+        {
+            CheckTimeout(now);
+            return; // Duplicate/out-of-order input never renews the valid-frame watchdog.
+        }
+
+        double sinceLast = now - _lastPacketTime;
+        bool segment = carChanged || backwards || (_hasTimestamp && delta > 250) || sinceLast > 0.25;
+        if (segment) ResetState();
+        var c = _config();
+        Counters.Packets++;
+        if (sinceLast > 0 && sinceLast <= 0.25)
+        {
+            float alpha = 1f - MathF.Pow(0.95f, (float)sinceLast * 60f);
+            _avgPacketDt += ((float)sinceLast - _avgPacketDt) * alpha;
+        }
+        _lastPacketTime = now;
+        _lastTimestamp = p.TimestampMs;
+        _lastCarOrdinal = p.CarOrdinal;
+        _hasTimestamp = true;
+
+        _bus.Status = new TelemetryStatus(p.IsRaceOn, p.SpeedKmh, p.CurrentEngineRpm, p.EngineMaxRpm, p.Gear,
+            p.SurfaceRumble.Max(), 1f / MathF.Max(_avgPacketDt, 1e-3f), now);
+
         ForzaPacket? prev = _prev;
-        if (prev != null && now - _prevTime > 0.25) prev = null; // stream gap: do not calculate derivatives
-        float dt = ComputeDt(p, prev, now);
+        float dt = prev == null ? 1f / 60f : Math.Max(delta, 1u) / 1000f;
 
         var t = new HapticTargets();
         float speedKmh = MathF.Max(0f, p.SpeedKmh);
@@ -75,11 +108,23 @@ public sealed class TelemetryProcessor
         float throttle = p.Throttle01;
         float brake = p.Brake01;
 
-        // Road contact: 0 = fully extended suspension (wheel in the air).
+        // Suspension extension is only a contact heuristic, not a measured grounded flag.
         Span<float> contact = stackalloc float[2];
-        var susp = p.NormalizedSuspensionTravel;
-        contact[0] = susp.FL > 0.01f || susp.RL > 0.01f ? 1f : 0f;
-        contact[1] = susp.FR > 0.01f || susp.RR > 0.01f ? 1f : 0f;
+        for (int side = 0; side < 2; side++)
+        {
+            float travel = side == 0 ? MathF.Max(p.NormalizedSuspensionTravel.FL, p.NormalizedSuspensionTravel.RL)
+                : MathF.Max(p.NormalizedSuspensionTravel.FR, p.NormalizedSuspensionTravel.RR);
+            if (prev == null)
+            {
+                _contact[side] = travel > 0.01f;
+                _contactLevel[side] = _contact[side] ? 1f : 0f;
+                _prevWet[side] = p.WheelInPuddle.MaxAbs(side) > 0.01f;
+            }
+            else if (travel > 0.02f) _contact[side] = true;
+            else if (travel < 0.005f) _contact[side] = false;
+            _contactLevel[side] += ((_contact[side] ? 1f : 0f) - _contactLevel[side]) * (1f - MathF.Exp(-dt / 0.03f));
+            contact[side] = _contactLevel[side];
+        }
 
         // --- Road texture ---
         if (c.Road.Enabled)
@@ -134,13 +179,13 @@ public sealed class TelemetryProcessor
             {
                 float wet = p.WheelInPuddle.MaxAbs(s);
                 bool isWet = wet > 0.01f;
-                t.Water[s] = isWet ? c.Water.Gain * (0.3f + 0.7f * speedFactor) * MathF.Max(wet, 0.5f) : 0f;
-                if (isWet && !_prevWet[s] && speedKmh > 5f) splash[s] = c.Water.SplashGain * (0.3f + 0.7f * speedFactor);
+                t.Water[s] = isWet ? c.Water.Gain * (0.3f + 0.7f * speedFactor) * MathF.Max(wet, 0.5f) * moving : 0f;
+                if (prev != null && isWet && !_prevWet[s] && speedKmh > 5f) splash[s] = c.Water.SplashGain * (0.3f + 0.7f * speedFactor);
                 _prevWet[s] = isWet;
             }
             if (splash[0] > 0f || splash[1] > 0f)
             {
-                _bus.Kick(new HapticKick(splash[0] + 0.3f * splash[1], splash[1] + 0.3f * splash[0], c.Water.SplashFreqHz, 0.12f, KickKind.Noise));
+                _bus.Kick(new HapticKick(splash[0] + 0.3f * splash[1], splash[1] + 0.3f * splash[0], c.Water.SplashFreqHz, 0.12f, KickKind.Noise) { EffectName = "splash" });
                 Counters.Splashes++;
             }
         }
@@ -168,10 +213,10 @@ public sealed class TelemetryProcessor
             float aL = MathX.SmoothStep(c.Suspension.ThresholdMps, c.Suspension.FullMps, strength[0]);
             float aR = MathX.SmoothStep(c.Suspension.ThresholdMps, c.Suspension.FullMps, strength[1]);
             float a = MathF.Max(aL, aR);
-            if (a > 0.02f && (now - _lastBumpTime > 0.06 || a > 0.6f))
+            if (a > 0.02f && now - _lastBumpTime >= 0.06)
             {
                 _bus.Kick(new HapticKick(c.Suspension.Gain * (aL + 0.3f * aR), c.Suspension.Gain * (aR + 0.3f * aL),
-                    c.Suspension.FreqHz, c.Suspension.DecayMs / 1000f, KickKind.Sine));
+                    c.Suspension.FreqHz, c.Suspension.DecayMs / 1000f, KickKind.Sine) { EffectName = "suspension" });
                 _lastBumpTime = now;
                 Counters.Bumps++;
             }
@@ -181,82 +226,86 @@ public sealed class TelemetryProcessor
         if (c.GearShift.Enabled && _prevGear >= 0 && p.Gear != _prevGear && speedKmh > 3f)
         {
             float a = c.GearShift.Gain * (0.6f + 0.4f * throttle);
-            _bus.Kick(new HapticKick(a, a, c.GearShift.FreqHz, c.GearShift.DecayMs / 1000f, KickKind.Sine));
+            _bus.Kick(new HapticKick(a, a, c.GearShift.FreqHz, c.GearShift.DecayMs / 1000f, KickKind.Sine) { EffectName = "shift" });
             Counters.Shifts++;
         }
         _prevGear = p.Gear;
 
         // --- Collisions ---
         float smash = p.SmashableVelDiff;
-        if (c.Impact.Enabled)
+        if (c.Impact.Enabled && prev != null)
         {
             var acc = new Vector2(p.Acceleration.X, p.Acceleration.Z); // horizontal plane
             float accG = acc.Length() / G;
-            float jumpG = prev == null ? 0f : (acc - new Vector2(prev.Acceleration.X, prev.Acceleration.Z)).Length() / G;
+            float jumpG = (acc - new Vector2(prev.Acceleration.X, prev.Acceleration.Z)).Length() / (G * dt * 60f);
             float amt = MathX.SmoothStep(c.Impact.StartG, c.Impact.FullG, MathF.Max(accG, jumpG));
-            bool refractoryOver = now - _lastImpactTime > 0.15;
+            bool refractoryOver = now - _lastImpactTime >= 0.15;
+            if (amt <= 0.03f) _impactArmed = true;
 
-            if (amt > 0.03f && (refractoryOver || amt > _lastImpactAmt * 1.5f))
+            if (amt > 0.03f && _impactArmed && refractoryOver)
             {
                 // +X: the car was pushed right → the impact came from the left
                 float side = MathX.Clamp(acc.X / (acc.Length() + 1e-3f), -1f, 1f);
                 float amp = c.Impact.Gain * amt;
                 float l = amp * (0.65f + 0.35f * side);
                 float r = amp * (0.65f - 0.35f * side);
-                _bus.Kick(new HapticKick(l, r, c.Impact.FreqHz, c.Impact.DecayMs / 1000f, KickKind.Sine));
-                _bus.Kick(new HapticKick(l * 0.5f, r * 0.5f, c.Impact.NoiseFreqHz, 0.04f, KickKind.Noise));
+                _bus.Kick(new HapticKick(l, r, c.Impact.FreqHz, c.Impact.DecayMs / 1000f, KickKind.Sine) { EffectName = "collision" });
+                _bus.Kick(new HapticKick(l * 0.5f, r * 0.5f, c.Impact.NoiseFreqHz, 0.04f, KickKind.Noise) { EffectName = "collision" });
                 _lastImpactTime = now;
-                _lastImpactAmt = amt;
+                _impactArmed = false;
                 Counters.Impacts++;
-            }
-            else if (refractoryOver)
-            {
-                _lastImpactAmt = 0f;
             }
 
             // Destructible objects (fences, signs)
-            if (smash > 0.5f && (_prevSmash <= 0.5f || MathF.Abs(smash - _prevSmash) > 0.5f))
+            if (smash <= 0.5f) _smashArmed = true;
+            if (smash > 0.5f && _smashArmed && now - _lastSmashTime >= 0.15)
             {
                 float amp = c.Impact.Gain * 0.7f * MathX.Clamp01(smash / MathF.Max(0.1f, c.Impact.SmashableFullVel));
-                _bus.Kick(new HapticKick(amp, amp, c.Impact.SmashFreqHz, 0.08f, KickKind.Sine));
-                _bus.Kick(new HapticKick(amp * 0.6f, amp * 0.6f, c.Impact.NoiseFreqHz, 0.05f, KickKind.Noise));
+                _bus.Kick(new HapticKick(amp, amp, c.Impact.SmashFreqHz, 0.08f, KickKind.Sine) { EffectName = "smash" });
+                _bus.Kick(new HapticKick(amp * 0.6f, amp * 0.6f, c.Impact.NoiseFreqHz, 0.05f, KickKind.Noise) { EffectName = "smash" });
+                _smashArmed = false;
+                _lastSmashTime = now;
                 Counters.Smashes++;
             }
         }
-        _prevSmash = smash;
+        if (prev == null)
+        {
+            _smashArmed = smash <= 0.5f;
+            float initialG = new Vector2(p.Acceleration.X, p.Acceleration.Z).Length() / G;
+            _impactArmed = MathX.SmoothStep(c.Impact.StartG, c.Impact.FullG, initialG) <= 0.03f;
+        }
 
         _bus.Targets = t;
+        _bus.PublishTriggerTelemetry(p, now);
         _silent = false;
         _prev = p;
-        _prevTime = now;
     }
 
-    /// <summary>Call periodically when no packets arrive to fade out vibration.</summary>
+    /// <summary>Check after every datagram as well as when no datagrams arrive.</summary>
     public void CheckTimeout(double now)
     {
-        if (!_silent && now - _lastPacketTime > 0.3)
-        {
-            PublishSilent();
-            _prev = null;
-        }
+        ObserveRevision();
+        if (!_silent && double.IsFinite(now) && now - _lastPacketTime >= TimeoutSeconds) ResetState();
     }
 
-    private void PublishSilent()
+    private void ObserveRevision()
     {
-        _bus.Targets = HapticTargets.Silent;
-        _bus.Triggers = TriggerPair.Off;
+        long revision = _revision();
+        if (revision == _lastRevision) return;
+        _lastRevision = revision;
+        ResetState();
+    }
+
+    private void ResetState()
+    {
+        _bus.ResetEffects();
+        _prev = null;
+        _prevGear = -1;
+        Array.Clear(_prevWet);
+        Array.Clear(_contact);
+        Array.Clear(_contactLevel);
+        _lastBumpTime = _lastImpactTime = _lastSmashTime = double.NegativeInfinity;
+        _impactArmed = _smashArmed = true;
         _silent = true;
-    }
-
-    private float ComputeDt(ForzaPacket p, ForzaPacket? prev, double now)
-    {
-        if (prev != null)
-        {
-            long diffMs = (long)p.TimestampMs - prev.TimestampMs;
-            if (diffMs > 0 && diffMs < 250) return Math.Max(diffMs, 2) / 1000f;
-        }
-        double arrival = now - _prevTime;
-        if (arrival > 0.002 && arrival < 0.25) return (float)arrival;
-        return 1f / 60f;
     }
 }

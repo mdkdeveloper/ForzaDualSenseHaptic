@@ -25,12 +25,23 @@ public sealed class TriggerHidWriter : IDisposable
     private readonly Thread _thread;
     private volatile bool _running;
     private long _errors;
+    private long _sent;
+    private TriggerPair? _lastSent;
+    private string? _lastError;
+    private bool _loggedActiveReport;
+    private byte _sequence;
 
     public string Description { get; }
-    public string Health => Interlocked.Read(ref _errors) > 0 ? $"trigger errors: {Interlocked.Read(ref _errors)}" : "";
+    public string DeviceId { get; }
+    // A successful OS write is not an acknowledgement from the controller.
+    public string Health => $"trigger HID: {Interlocked.Read(ref _sent)} writes, {Interlocked.Read(ref _errors)} errors" +
+        (Volatile.Read(ref _lastSent) is { } pair ? $" | last written {pair}" : " | no report written") +
+        (!_thread.IsAlive && _running ? " | writer stopped" : "") +
+        (Volatile.Read(ref _lastError) is { } error ? $" | last error: {error}" : "");
 
     public TriggerHidWriter(DualSenseHid.Info info, HapticBus bus)
     {
+        DeviceId = info.Device.DevicePath;
         if (!info.Device.TryOpen(out HidStream stream))
             throw new IOException("Could not open the DualSense HID device (Steam Input, DS4Windows, or DSX may be holding it)");
 
@@ -48,7 +59,7 @@ public sealed class TriggerHidWriter : IDisposable
     }
 
     /// <summary>Report containing trigger effects. Kept separate for testing.</summary>
-    internal static byte[] BuildReport(bool bluetooth, TriggerPair pair)
+    internal static byte[] BuildReport(bool bluetooth, TriggerPair pair, byte sequence = 0)
     {
         byte[] buf;
         int common; // offset of the common report section (valid_flag0)
@@ -56,8 +67,9 @@ public sealed class TriggerHidWriter : IDisposable
         {
             buf = new byte[BtReportSize];
             buf[0] = 0x31;
-            buf[1] = 0x02;
-            common = 2;
+            buf[1] = (byte)((sequence & 15) << 4);
+            buf[2] = 0x10;
+            common = 3;
         }
         else
         {
@@ -87,21 +99,20 @@ public sealed class TriggerHidWriter : IDisposable
     private void Loop()
     {
         var clock = Stopwatch.StartNew();
-        TriggerPair? last = null;
-        double lastWrite = double.NegativeInfinity;
+        var scheduler = new TriggerWriteScheduler();
         int consecutiveErrors = 0;
 
         while (_running)
         {
-            var pair = _bus.Triggers;
+            var desired = _bus.Triggers;
             double now = clock.Elapsed.TotalSeconds;
-            // Write on changes and every 0.5 s to restore state after another writer modifies it.
-            if (pair != last || now - lastWrite > 0.5)
+            var pair = scheduler.SelectReport(desired, now);
+            // Coalesce ordinary changes, but release a trigger immediately. Do not fight other HID writers.
+            if (pair != null)
             {
                 if (TryWrite(pair, ref consecutiveErrors))
                 {
-                    last = pair;
-                    lastWrite = now;
+                    scheduler.Written(pair, now);
                 }
                 else if (consecutiveErrors > 300)
                 {
@@ -117,13 +128,24 @@ public sealed class TriggerHidWriter : IDisposable
     {
         try
         {
-            _stream.Write(BuildReport(_bluetooth, pair));
+            var report = BuildReport(_bluetooth, pair, _sequence);
+            _stream.Write(report);
+            Volatile.Write(ref _lastSent, pair);
+            Interlocked.Increment(ref _sent);
+            if (!_loggedActiveReport && pair != TriggerPair.Off)
+            {
+                _loggedActiveReport = true;
+                Log.Info($"Triggers: first active {(_bluetooth ? "Bluetooth" : "USB")} HID write completed: {pair}. " +
+                    "This confirms an OS write, not controller acknowledgement. Report: " + Convert.ToHexString(report));
+            }
+            _sequence = (byte)((_sequence + 1) & 15);
             consecutiveErrors = 0;
             return true;
         }
         catch (Exception ex) when (ex is IOException or TimeoutException or ObjectDisposedException)
         {
             Interlocked.Increment(ref _errors);
+            Volatile.Write(ref _lastError, ex.Message);
             if (++consecutiveErrors == 1) Log.Warn($"Triggers: write error ({ex.Message})");
             return false;
         }
@@ -136,5 +158,31 @@ public sealed class TriggerHidWriter : IDisposable
         int ignored = 0;
         TryWrite(TriggerPair.Off, ref ignored); // release the triggers
         _stream.Dispose();
+    }
+}
+
+/// <summary>Transport scheduling; immutable effects are coalesced independently of telemetry rate.</summary>
+internal sealed class TriggerWriteScheduler
+{
+    private TriggerPair? _last;
+    private double _lastWrite = double.NegativeInfinity;
+    public bool ShouldWrite(TriggerPair pair, double now) => SelectReport(pair, now) != null;
+
+    public TriggerPair? SelectReport(TriggerPair desired, double now)
+    {
+        if (desired == _last) return null;
+        if (_last == null || now - _lastWrite >= 0.05 - 1e-9) return desired;
+        bool leftRelease = desired.L2.Mode == TriggerEffect.ModeOff && _last.L2.Mode != TriggerEffect.ModeOff;
+        bool rightRelease = desired.R2.Mode == TriggerEffect.ModeOff && _last.R2.Mode != TriggerEffect.ModeOff;
+        if (!leftRelease && !rightRelease) return null;
+        // Emergency release must not smuggle an unrelated force increase past the ordinary rate limit.
+        return new TriggerPair(leftRelease ? TriggerEffect.Off : _last.L2,
+            rightRelease ? TriggerEffect.Off : _last.R2);
+    }
+
+    public void Written(TriggerPair pair, double now)
+    {
+        _last = pair;
+        _lastWrite = now;
     }
 }

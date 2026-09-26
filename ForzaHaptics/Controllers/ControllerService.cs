@@ -121,11 +121,16 @@ public sealed class ControllerService : IControllerService
                                     if (valid)
                                     {
                                         DualSenseBatteryParser.TryParse(report, selected.Transport, out int? percent, out bool charging);
+                                        DualSenseTriggerFeedbackParser.TryParse(report, selected.Transport, out var feedback);
+                                        DualSensePhysicalInputParser.TryParse(report, selected.Transport, out byte left, out byte right);
                                         lastValidReport = Environment.TickCount64;
-                                        Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = percent, IsCharging = charging });
+                                        Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = percent, IsCharging = charging,
+                                            TriggerFeedback = feedback, LeftTrigger = left, RightTrigger = right, LastInputTick = lastValidReport });
                                     }
                                     else if (Environment.TickCount64 - lastValidReport > 5000)
-                                        Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = null, IsCharging = false });
+                                        Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = null, IsCharging = false, TriggerFeedback = null });
+                                    else if (Environment.TickCount64 - lastValidReport > 300)
+                                        Volatile.Write(ref _snapshot, Snapshot with { TriggerFeedback = null });
                                 }
                             } while (!token.IsCancellationRequested && Volatile.Read(ref _disconnecting) == 0 && Environment.TickCount64 < deadline);
                             continue;
@@ -137,8 +142,8 @@ public sealed class ControllerService : IControllerService
                                 if (_generation == generation && _disconnecting == 0)
                                 {
                                     CloseConnection();
-                                    // Discovery owns connection status. Read failures only invalidate battery data.
-                                    Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = null, IsCharging = false });
+                                    // Discovery owns connection status. Read failures invalidate reported input data.
+                                    Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = null, IsCharging = false, TriggerFeedback = null, LastInputTick = 0 });
                                 }
                             }
                         }

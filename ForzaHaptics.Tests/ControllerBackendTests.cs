@@ -64,12 +64,32 @@ public sealed class ControllerBackendTests
         backend.Devices = [Usb];
         await Until(() => service.Snapshot.BatteryPercent == 55);
         Assert.Equal("usb", service.Snapshot.DeviceId);
+        Assert.NotNull(service.Snapshot.TriggerFeedback);
+        Assert.Equal(41, service.Snapshot.LeftTrigger);
+        Assert.Equal(183, service.Snapshot.RightTrigger);
+        Assert.True(service.Snapshot.IsInputFresh);
+        Assert.Contains("L2 off/other", service.Snapshot.TriggerFeedbackText);
         backend.Devices = [];
         await Until(() => !service.Snapshot.IsConnected);
         Assert.Null(service.Snapshot.BatteryPercent);
+        Assert.Null(service.Snapshot.TriggerFeedback);
         backend.Devices = [Bluetooth];
         await Until(() => service.Snapshot.DeviceId == "bt" && service.Snapshot.BatteryPercent == 55);
         Assert.True(service.Snapshot.CanDisconnect);
+    }
+
+    [Fact]
+    public async Task InvalidReportStreamCannotRefreshPhysicalInput()
+    {
+        var backend = new FakeBackend { Devices = [Bluetooth] };
+        using var service = new ControllerService(backend, pollMs: 10);
+        await Until(() => service.Snapshot.IsInputFresh);
+        backend.InvalidReports = true;
+        await Until(() => !service.Snapshot.IsInputFresh);
+        Assert.Equal("physical L2/R2: unavailable", service.Snapshot.PhysicalTriggerText);
+        backend.InvalidReports = false;
+        await Until(() => service.Snapshot.IsInputFresh);
+        Assert.Equal(183, service.Snapshot.RightTrigger);
     }
 
     [Fact]
@@ -165,6 +185,88 @@ public sealed class ControllerBackendTests
         await Until(() => service.Snapshot.CanDisconnect);
     }
 
+    [Theory]
+    [InlineData(ControllerTransport.Usb)]
+    [InlineData(ControllerTransport.Bluetooth)]
+    public void TriggerFeedbackUsesDistinctModeAndMotorStateNibbles(ControllerTransport transport)
+    {
+        var report = Report(transport, 0x05);
+        int common = transport == ControllerTransport.Bluetooth ? 2 : 1;
+        report[common + 41] = 0x19; // Right loaded, stop zone 9.
+        report[common + 42] = 0x07; // Left not vibrating, stop zone 7.
+        report[common + 47] = 0x31; // Left vibration, right feedback.
+        if (transport == ControllerTransport.Bluetooth)
+            BinaryPrimitives.WriteUInt32LittleEndian(report.AsSpan(74), DualSenseBatteryParser.ComputeCrc(0xA1, report.AsSpan(0, 74)));
+        Assert.True(DualSenseTriggerFeedbackParser.TryParse(report, transport, out var feedback));
+        Assert.Equal(new ControllerTriggerFeedback(3, 1, 0, 1), feedback);
+        Assert.Equal("L2 vibration state=0x0 / R2 feedback state=0x1", feedback!.ToString());
+        Assert.False(DualSenseTriggerFeedbackParser.TryParse(report.AsSpan(0, report.Length - 1), transport, out _));
+        Assert.False(DualSenseTriggerFeedbackParser.TryParse([], transport, out _));
+        Assert.False(DualSenseTriggerFeedbackParser.TryParse(report, ControllerTransport.None, out _));
+        report[0] = 0x02;
+        Assert.False(DualSenseTriggerFeedbackParser.TryParse(report, transport, out _));
+    }
+
+    [Fact]
+    public void CorruptBluetoothTriggerFeedbackIsNeverPublished()
+    {
+        var report = Report(ControllerTransport.Bluetooth, 0x05);
+        report[49] = 0x11;
+        Assert.False(DualSenseTriggerFeedbackParser.TryParse(report, ControllerTransport.Bluetooth, out var feedback));
+        Assert.Null(feedback);
+    }
+
+    [Fact]
+    public void UnknownControllerEffectsRetainRawCodesAndStaleFeedbackIsUnavailable()
+    {
+        var report = Report(ControllerTransport.Usb, 0x05);
+        report[48] = 0xA7;
+        report[43] = 0xF0;
+        Assert.True(DualSenseTriggerFeedbackParser.TryParse(report, ControllerTransport.Usb, out var feedback));
+        Assert.Equal(new ControllerTriggerFeedback(10, 7, 15, 0), feedback);
+        var snapshot = new ControllerSnapshot { IsConnected = true, TriggerFeedback = feedback, LastInputTick = Environment.TickCount64 };
+        Assert.Contains("unknown(0xA) state=0xF", snapshot.TriggerFeedbackText);
+        Assert.Contains("unknown(0x7)", snapshot.TriggerFeedbackText);
+        Assert.Equal("controller reported: unavailable", (snapshot with { LastInputTick = Environment.TickCount64 - 501 }).TriggerFeedbackText);
+        Assert.Equal("controller reported: unavailable", (snapshot with { IsConnected = false }).TriggerFeedbackText);
+        Assert.Equal("controller reported: unavailable", (snapshot with { TriggerFeedback = null }).TriggerFeedbackText);
+    }
+    [Theory]
+    [InlineData(ControllerTransport.Usb)]
+    [InlineData(ControllerTransport.Bluetooth)]
+    public void PhysicalTravelUsesValidatedCommonInputBytes(ControllerTransport transport)
+    {
+        var report = Report(transport, 0x05);
+        int common = transport == ControllerTransport.Bluetooth ? 2 : 1;
+        report[common + 4] = 37;
+        report[common + 5] = 219;
+        if (transport == ControllerTransport.Bluetooth)
+            BinaryPrimitives.WriteUInt32LittleEndian(report.AsSpan(74), DualSenseBatteryParser.ComputeCrc(0xA1, report.AsSpan(0, 74)));
+        Assert.True(DualSensePhysicalInputParser.TryParse(report, transport, out byte left, out byte right));
+        Assert.Equal(37, left);
+        Assert.Equal(219, right);
+        Assert.False(DualSensePhysicalInputParser.TryParse(report.AsSpan(0, 10), transport, out _, out _));
+        Assert.False(DualSensePhysicalInputParser.TryParse(report, ControllerTransport.None, out _, out _));
+        if (transport == ControllerTransport.Bluetooth)
+        {
+            report[common + 4] ^= 1;
+            Assert.False(DualSensePhysicalInputParser.TryParse(report, transport, out left, out right));
+            Assert.Equal(0, left);
+            Assert.Equal(0, right);
+        }
+    }
+
+    [Fact]
+    public void PhysicalInputFreshnessIsBoundedAndNeverInferredFromConnection()
+    {
+        var snapshot = new ControllerSnapshot { IsConnected = true, LastInputTick = 1000, LeftTrigger = 200 };
+        Assert.True(snapshot.IsInputFreshAt(1300));
+        Assert.False(snapshot.IsInputFreshAt(1301));
+        Assert.False(snapshot.IsInputFreshAt(999));
+        Assert.False((snapshot with { LastInputTick = 0 }).IsInputFreshAt(100));
+        Assert.False((snapshot with { IsConnected = false }).IsInputFreshAt(1000));
+    }
+
     private static readonly ControllerDevice Usb = new("usb", "DualSense", ControllerTransport.Usb, false);
     private static readonly ControllerDevice Bluetooth = new("bt", "DualSense", ControllerTransport.Bluetooth, true);
     private static byte[] Report(ControllerTransport transport, byte status)
@@ -173,6 +275,8 @@ public sealed class ControllerBackendTests
         var report = new byte[bt ? 78 : 64];
         report[0] = bt ? (byte)0x31 : (byte)0x01;
         report[bt ? 54 : 53] = status;
+        report[(bt ? 2 : 1) + 4] = 41;
+        report[(bt ? 2 : 1) + 5] = 183;
         if (bt) BinaryPrimitives.WriteUInt32LittleEndian(report.AsSpan(74), DualSenseBatteryParser.ComputeCrc(0xA1, report.AsSpan(0, 74)));
         return report;
     }
@@ -185,6 +289,7 @@ public sealed class ControllerBackendTests
     {
         public volatile ControllerDevice[] Devices = [];
         public bool FailDisconnect;
+        public volatile bool InvalidReports;
         public int DisconnectCount;
         public ManualResetEventSlim? DisconnectGate;
         public FakeConnection? LastConnection;
@@ -200,7 +305,7 @@ public sealed class ControllerBackendTests
             }
             return snapshot;
         }
-        public IControllerConnection Open(string id) => LastConnection = new FakeConnection(Devices.Single(d => d.Id == id).Transport);
+        public IControllerConnection Open(string id) => LastConnection = new FakeConnection(Devices.Single(d => d.Id == id).Transport, () => InvalidReports);
         public void Disconnect(string id)
         {
             Interlocked.Increment(ref DisconnectCount);
@@ -209,14 +314,14 @@ public sealed class ControllerBackendTests
             Devices = Devices.Where(d => d.Id != id).ToArray();
         }
     }
-    private sealed class FakeConnection(ControllerTransport transport) : IControllerConnection
+    private sealed class FakeConnection(ControllerTransport transport, Func<bool> invalidReports) : IControllerConnection
     {
         public volatile bool Disposed;
         public byte[]? Read()
         {
             Thread.Sleep(2);
             ObjectDisposedException.ThrowIf(Disposed, this);
-            return Report(transport, 0x05);
+            return invalidReports() ? [0x01, 0] : Report(transport, 0x05);
         }
         public void Dispose() => Disposed = true;
     }

@@ -22,12 +22,14 @@ public sealed class ConfigManager : IDisposable
 
     private readonly object _sync = new();
     private AppConfig _current = new();
+    private long _revision = 1;
     private FileSystemWatcher? _watcher;
     private System.Threading.Timer? _debounce;
     private double _ignoreWatcherUntil;
 
     public string? Path { get; private set; }
     public bool IsReadOnly => Path == null;
+    public long Revision => Interlocked.Read(ref _revision);
     // Never expose the factory configuration as a mutable shared object.
     public AppConfig Current => IsReadOnly ? new AppConfig() : Volatile.Read(ref _current);
 
@@ -48,6 +50,7 @@ public sealed class ConfigManager : IDisposable
             StopWatching();
             Path = null;
             Volatile.Write(ref _current, new AppConfig());
+            Interlocked.Increment(ref _revision);
         }
     }
 
@@ -79,6 +82,7 @@ public sealed class ConfigManager : IDisposable
             Path = path;
             _ignoreWatcherUntil = 0;
             Volatile.Write(ref _current, cfg);
+            Interlocked.Increment(ref _revision);
             StartWatching();
         }
         Log.Ok($"Profile: {System.IO.Path.GetFileNameWithoutExtension(path)}");
@@ -93,6 +97,7 @@ public sealed class ConfigManager : IDisposable
             var copy = Clone(cfg);
             copy.Validate();
             Volatile.Write(ref _current, copy);
+            Interlocked.Increment(ref _revision);
         }
     }
 
@@ -114,6 +119,7 @@ public sealed class ConfigManager : IDisposable
         {
             if (IsReadOnly) return;
             Volatile.Write(ref _current, Parse(ReadWithRetry(Path!)));
+            Interlocked.Increment(ref _revision);
         }
     }
 
@@ -129,8 +135,8 @@ public sealed class ConfigManager : IDisposable
 
     public static AppConfig Parse(string json)
     {
-        var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
-        cfg.Validate();
+        var cfg = ConfigMigration.Parse(json);
+        if (cfg.MigrationNotice != null) Log.Warn(cfg.MigrationNotice);
         return cfg;
     }
 
@@ -198,6 +204,7 @@ public sealed class ConfigManager : IDisposable
             {
                 if (path != Path) return;
                 Volatile.Write(ref _current, cfg);
+                Interlocked.Increment(ref _revision);
             }
             Log.Ok($"{System.IO.Path.GetFileName(path)} reloaded ✓");
             ReloadedFromDisk?.Invoke();

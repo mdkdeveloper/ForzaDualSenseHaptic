@@ -140,6 +140,10 @@
                                       Command="{Binding ApplyModesCommand}" IsEnabled="{Binding ControlsEnabled}"
                                       Margin="0,0,6,0"
                                       ToolTip.Tip="Left → right → 20–400 Hz sweep → impulses" />
+                        <ToggleButton Content="Gear trigger test" IsChecked="{Binding IsTriggerTestEnabled, Mode=TwoWay}"
+                                      Command="{Binding ApplyModesCommand}" IsEnabled="{Binding ControlsEnabled}"
+                                      Margin="0,0,6,0"
+                                      ToolTip.Tip="Gear shifts only, 12 seconds: hold L2/R2. Upshifts at 2/6/10s; downshifts at 4/8s. Enable the channels and desired gear directions. No slip or body effects. Stop cancels immediately." />
                         <Button Content="{Binding RestartText}" Command="{Binding RestartOutputCommand}"
                                 IsEnabled="{Binding ControlsEnabled}" Classes.pending="{Binding RestartPending}"
                                 ToolTip.Tip="Apply the port, output, channels, and trigger settings marked with ⟳" />
@@ -155,12 +159,14 @@
                 </Grid>
 
                 <Grid Grid.Row="2" Margin="0,8" ColumnDefinitions="Auto,160,Auto,160,*">
-                    <TextBlock Grid.Column="0" Text="L" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="0" Text="L signal" VerticalAlignment="Center" Margin="0,0,8,0" FontWeight="SemiBold"
+                               ToolTip.Tip="Synthesized signal peak, not measured actuator force" />
                     <ProgressBar Grid.Column="1" Value="{Binding LeftMeter}" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="2" Text="R" VerticalAlignment="Center" Margin="14,0,8,0" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="2" Text="R signal" VerticalAlignment="Center" Margin="14,0,8,0" FontWeight="SemiBold"
+                               ToolTip.Tip="Synthesized signal peak, not measured actuator force" />
                     <ProgressBar Grid.Column="3" Value="{Binding RightMeter}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="4" Text="{Binding DeviceText}" VerticalAlignment="Center" Margin="14,0,0,0"
-                               TextTrimming="CharacterEllipsis" Classes="secondary" />
+                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding DeviceText}" Classes="secondary" />
                 </Grid>
 
                 <Expander x:Name="ActivityLogExpander" Grid.Row="3" Header="Activity log"

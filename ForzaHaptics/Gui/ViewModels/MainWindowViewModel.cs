@@ -66,6 +66,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _isTestEnabled;
 
     [ObservableProperty]
+    private bool _isTriggerTestEnabled;
+
+    [ObservableProperty]
     private string _startStopText = "Stop";
 
     [ObservableProperty]
@@ -175,7 +178,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
         string device = IsEngineRunning ? _engine.OutputDescription : "Output is not running";
         if (_engine.HasTriggers)
-            device += " | " + _engine.TriggerState;
+            device += " | desired: " + _engine.TriggerState;
+        if (_engine.HasTriggers && _controller is not null)
+            device += " | " + _controller.Snapshot.PhysicalTriggerText + " | " + _controller.Snapshot.TriggerFeedbackText;
         DeviceText = device;
         StartStopText = IsEngineRunning ? "Stop" : "Start";
         RestartText = RestartPending ? "Restart output ⟳" : "Restart output";
@@ -239,13 +244,28 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     partial void OnIsSimulationEnabledChanged(bool value)
     {
         if (value)
+        {
             IsTestEnabled = false;
+            IsTriggerTestEnabled = false;
+        }
     }
 
     partial void OnIsTestEnabledChanged(bool value)
     {
         if (value)
+        {
             IsSimulationEnabled = false;
+            IsTriggerTestEnabled = false;
+        }
+    }
+
+    partial void OnIsTriggerTestEnabledChanged(bool value)
+    {
+        if (value)
+        {
+            IsSimulationEnabled = false;
+            IsTestEnabled = false;
+        }
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -438,6 +458,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         Simulate = IsSimulationEnabled,
         Test = IsTestEnabled,
+        TriggerTest = IsTriggerTestEnabled,
         ControllerDeviceId = _controller?.Snapshot.DeviceId,
     };
 

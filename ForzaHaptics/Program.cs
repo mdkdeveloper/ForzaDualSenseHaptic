@@ -13,7 +13,7 @@ internal sealed class Options
 {
     public string? ConfigPath, RecordPath, ReplayPath, RenderPath, Output;
     public int? Port;
-    public bool Simulate, Test, List, Help, ConsoleMode;
+    public bool Simulate, Test, TriggerTest, List, Help, ConsoleMode;
     public double Seconds = DrivingSimulator.Duration;
     public bool SecondsSet;
 
@@ -46,6 +46,7 @@ internal sealed class Options
                     o.SecondsSet = true;
                     break;
                 case "--test": o.Test = true; break;
+                case "--trigger-test": o.TriggerTest = true; break;
                 case "--list": o.List = true; break;
                 case "--console": o.ConsoleMode = true; break;
                 case "-h":
@@ -58,6 +59,8 @@ internal sealed class Options
         if (o.Simulate && o.ReplayPath != null) throw new ArgumentException("--simulate and --replay cannot be used together");
         if (o.Test && (o.Simulate || o.ReplayPath != null || o.RenderPath != null))
             throw new ArgumentException("--test must be used separately from other modes");
+        if (o.TriggerTest && (o.Test || o.Simulate || o.ReplayPath != null || o.RenderPath != null))
+            throw new ArgumentException("--trigger-test must be used separately from other modes");
         return o;
     }
 
@@ -71,6 +74,7 @@ internal sealed class Options
           --console            run without a window: receive FH6 telemetry and drive DualSense haptics
           --simulate           use a synthetic drive instead of the game (test without FH6)
           --test               motor test: left → right → sweep → impulses
+          --trigger-test       manual 12-second gear-only trigger test; other effects stay silent
           --record FILE        record telemetry to a file in parallel (.fhrec)
           --replay FILE        replay recorded telemetry in a loop
           --render FILE.wav    offline: generate a WAV (left/right motor) without a controller;
@@ -183,11 +187,12 @@ internal static class LiveRun
 {
     public static int Run(Options opt, ConfigManager config)
     {
-        using var engine = new HapticEngine(() => config.Current);
+        using var engine = new HapticEngine(() => config.Current, () => config.Revision);
         var options = new EngineOptions
         {
             Simulate = opt.Simulate,
             Test = opt.Test,
+            TriggerTest = opt.TriggerTest,
             ReplayPath = opt.ReplayPath,
             RecordPath = opt.RecordPath,
             Port = opt.Port,
@@ -387,7 +392,7 @@ internal static class OfflineRender
     public static int Run(Options opt, ConfigManager config)
     {
         var bus = new HapticBus();
-        var processor = new TelemetryProcessor(bus, () => config.Current);
+        var processor = new TelemetryProcessor(bus, () => config.Current, () => config.Revision);
         var synth = new HapticSynth(bus, () => config.Current, SampleRate);
         string path = Path.GetFullPath(opt.RenderPath!);
         var lastTriggers = bus.Triggers;
@@ -451,6 +456,7 @@ internal static class OfflineRender
                     if (opt.SecondsSet && t > opt.Seconds) break;
                     RenderUntil(t);
                     if (ForzaPacket.TryParse(data, out var packet)) Process(packet, t);
+                    processor.CheckTimeout(t);
                     last = t;
                 }
                 RenderUntil(last + 0.5);
@@ -474,7 +480,7 @@ internal static class OfflineRender
         var c = processor.Counters;
         Log.Info($"  packets {c.Packets}; suspension hits {c.Bumps}, shifts {c.Shifts}, impacts {c.Impacts}, " +
                  $"smashes {c.Smashes}, splashes {c.Splashes}");
-        Log.Info($"  L2/R2 trigger state changes: {triggerChanges} (each writes to the controller), including {triggerModeSwitches} mode changes");
+        Log.Info($"  L2/R2 desired state changes: {triggerChanges}, including {triggerModeSwitches} mode changes (hardware writes are separately rate-limited)");
         Log.Info("  RMS by second (L | R):");
         for (int i = 0; i < perSecond.Count; i++)
         {

@@ -53,8 +53,10 @@ public sealed class App : Application
 
             MainWindow? window = null;
             var dialogs = new AvaloniaUserDialogService(() => window);
-            var engine = new HapticEngineFacade(() => session.Current);
-            var controller = new ControllerService(
+            ControllerService? controller = null;
+            var engine = new HapticEngineFacade(() => session.Current, () => session.Revision,
+                () => controller?.Snapshot ?? ControllerSnapshot.Disconnected);
+            controller = new ControllerService(
                 () => session.Current.Output,
                 () => engine.IsRunning ? engine.ActiveControllerDeviceId : null);
             var viewModel = new MainWindowViewModel(
