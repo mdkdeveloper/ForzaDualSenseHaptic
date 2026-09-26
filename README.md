@@ -78,7 +78,10 @@ The UI is built with Avalonia and an MVVM architecture. Avalonia makes the prese
 - Runtime status, device information, output levels, and engine controls are grouped below the settings. The **Activity log** is collapsed by default; expand it when you need detailed runtime messages.
 - Profiles are `*.json` files in the **`Configs` directory beside the executable**. You can create a profile from defaults with **New**, or **Duplicate**, **Rename**, **Delete** it to the Recycle Bin, and switch profiles using the **Profile** list. The most recently selected profile is restored at the next launch through `ForzaHaptics.settings.json`, also beside the executable.
 - Files in `Configs` are discovered at startup and when you select **⟳ Refresh**, so a profile can be installed by simply copying it into the directory.
-- On first launch, an existing `config.json` is migrated to a profile named `Default`, with comments preserved. Profiles may also be edited by hand; file changes are reloaded while the application is running.
+- **Default** is built into the application and read-only. Select it to inspect or use the factory settings; use **Duplicate** to make an editable copy. It cannot be edited, saved, renamed, or deleted, and it has no JSON file.
+- A clean installation starts with **profile_1**, stored as `Configs/profile_1.json`. Its commented template is embedded in the executable and written only when missing. Builds and publishing never overwrite your runtime profile. Editable profiles reload after external edits.
+- Root-level `config.json` is no longer discovered or imported automatically. An existing `Configs/Default.json` is preserved by migration to `profile_1`, or a unique `Default_imported_N` when that name is occupied; the saved selection follows the migrated profile.
+- The last selection is restored at startup. If it is missing or invalid, the app logs the problem and tries `profile_1`, then built-in Default. Explicit `--config FILE` remains supported and never changes built-in Default.
 
 ## Command line
 
@@ -99,7 +102,7 @@ ForzaHaptics [options]
 
 ## Configuration and tuning
 
-All settings are available in the window and in the corresponding profile file under `Configs`. **Gain** controls effect strength; **Enabled** turns an effect on or off.
+All settings are available in the window; editable profiles also have a corresponding file under `Configs`. Built-in Default is available for inspection only. **Gain** controls effect strength; **Enabled** turns an effect on or off.
 
 Tuning tips:
 
@@ -135,7 +138,7 @@ ForzaHaptics/
   Gui/Services/ and Gui/Dialogs/   platform integrations and asynchronous modal dialogs
   AppConfig.cs                     settings and UI field metadata ([Ui], [UiGroup])
   HapticEngine.cs                  real-time engine shared by GUI and console modes
-  config.json                      defaults used to create the Default profile
+  Configs/profile_1.json            embedded seed for the first editable profile
   Program.cs                       entry point, console modes, and offline rendering
 ```
 
@@ -155,3 +158,7 @@ Hardware diagnostics are opt-in. Set `FORZAHAPTICS_HARDWARE_TEST=1` and `FORZAHA
 - Telemetry format: [Forza Horizon 6 “Data Out” Documentation](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation).
 - Ideas and channel verification: [DualSenseY-v2](https://github.com/WujekFoliarz/DualSenseY-v2) and [HorizonHaptics](https://github.com/haritha99ch/HorizonHaptics).
 - Libraries: [Avalonia](https://avaloniaui.net/), [CommunityToolkit.Mvvm](https://learn.microsoft.com/dotnet/communitytoolkit/mvvm/), [NAudio](https://github.com/naudio/NAudio) (MIT), and [HidSharp](https://www.zer7.com/software/hidsharp) (Apache 2.0).
+
+## Telemetry and haptics audit
+
+See the [Ukrainian telemetry and haptics audit](docs/telemetry-haptics-audit.uk.md) for field mapping, current defaults, protocol findings, and proposed comfort improvements. Effect logic and numerical defaults are unchanged by the profile update; the audit recommendations are not implemented or manufacturer-certified lifetime limits.

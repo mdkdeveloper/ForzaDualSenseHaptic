@@ -7,6 +7,99 @@ namespace ForzaHaptics.Tests;
 public sealed class MainWindowViewModelTests
 {
     [Fact]
+    public async Task DefaultCannotBeEditedSavedRenamedOrDeletedButCanBeCopied()
+    {
+        var profiles = new FakeProfileSession();
+        profiles.SwitchTo("Default");
+        using var viewModel = CreateViewModel(profiles: profiles);
+        Assert.True(viewModel.Settings.IsReadOnly);
+        Assert.False(viewModel.CanDeleteProfile);
+        Assert.False(viewModel.SaveCommand.CanExecute(null));
+        Assert.False(viewModel.RenameProfileCommand.CanExecute(null));
+        Assert.False(viewModel.DeleteProfileCommand.CanExecute(null));
+        Assert.All(viewModel.Settings.Tabs.SelectMany(tab => tab.Groups).SelectMany(group => group.Fields),
+            field => Assert.False(field.IsEnabled));
+        var port = Assert.IsType<TextSettingFieldViewModel>(Field(viewModel.Settings, "Connection", nameof(AppConfig.Port)));
+        port.Text = "5400";
+        Assert.False(port.TryCommitText());
+        viewModel.SaveCommand.Execute(null);
+        await viewModel.RenameProfileCommand.ExecuteAsync(null);
+        await viewModel.DeleteProfileCommand.ExecuteAsync(null);
+        Assert.Equal("Default", profiles.ActiveProfile);
+        Assert.Equal(5310, profiles.Current.Port);
+        Assert.Equal(0, profiles.SaveCount);
+        Assert.False(viewModel.IsDirty);
+
+        await viewModel.DuplicateProfileCommand.ExecuteAsync(null);
+        Assert.Equal("Default (copy)", profiles.ActiveProfile);
+        Assert.False(viewModel.Settings.IsReadOnly);
+        Assert.True(viewModel.SaveCommand.CanExecute(null));
+        Assert.True(viewModel.RenameProfileCommand.CanExecute(null));
+        Assert.True(viewModel.CanDeleteProfile);
+    }
+
+    [Fact]
+    public void SwitchingToDefaultUpdatesEditorAndCommandAvailability()
+    {
+        var profiles = new FakeProfileSession();
+        using var viewModel = CreateViewModel(profiles: profiles);
+        Assert.False(viewModel.Settings.IsReadOnly);
+        viewModel.SelectedProfile = "Default";
+        Assert.True(viewModel.Settings.IsReadOnly);
+        Assert.False(viewModel.SaveCommand.CanExecute(null));
+        viewModel.SelectedProfile = "profile_1";
+        Assert.False(viewModel.Settings.IsReadOnly);
+        Assert.True(viewModel.SaveCommand.CanExecute(null));
+    }
+
+    [Theory]
+    [InlineData(true, "profile_1")]
+    [InlineData(false, "Default")]
+    public void RefreshMissingProfilePrefersEditableProfile(bool keepEditable, string expected)
+    {
+        var profiles = new FakeProfileSession();
+        profiles.Create("Missing", new AppConfig());
+        profiles.SwitchTo("Missing");
+        using var viewModel = CreateViewModel(profiles: profiles);
+        profiles.Delete("Missing");
+        if (!keepEditable)
+            profiles.Delete("profile_1");
+        viewModel.RefreshProfilesCommand.Execute(null);
+        Assert.Equal(expected, profiles.ActiveProfile);
+        Assert.Equal(expected == "Default", viewModel.Settings.IsReadOnly);
+    }
+
+    [Fact]
+    public void RefreshMissingProfileRecoversInitialProfileCaseInsensitively()
+    {
+        var profiles = new FakeProfileSession();
+        profiles.Delete(ProfileStore.InitialProfileName);
+        profiles.Create("PROFILE_1", new AppConfig());
+        profiles.Create("Missing", new AppConfig());
+        profiles.SwitchTo("Missing");
+        using var viewModel = CreateViewModel(profiles: profiles);
+        profiles.Delete("Missing");
+        viewModel.RefreshProfilesCommand.Execute(null);
+        Assert.Equal("PROFILE_1", profiles.ActiveProfile);
+        Assert.Equal("PROFILE_1", viewModel.SelectedProfile);
+        Assert.False(viewModel.Settings.IsReadOnly);
+    }
+
+    [Fact]
+    public void RefreshMissingProfileFallsBackToDefaultWhenInitialProfileCannotLoad()
+    {
+        var profiles = new FakeProfileSession();
+        profiles.Create("Missing", new AppConfig());
+        profiles.SwitchTo("Missing");
+        using var viewModel = CreateViewModel(profiles: profiles);
+        profiles.Delete("Missing");
+        profiles.UnloadableProfile = ProfileStore.InitialProfileName;
+        viewModel.RefreshProfilesCommand.Execute(null);
+        Assert.Equal(ProfileStore.DefaultName, profiles.ActiveProfile);
+        Assert.True(viewModel.Settings.IsReadOnly);
+    }
+
+    [Fact]
     public void SettingChangesApplyLiveAndSaveClearsDirtyState()
     {
         var profiles = new FakeProfileSession();
@@ -290,8 +383,9 @@ public sealed class MainWindowViewModelTests
     {
         private AppConfig _saved = new();
 
-        public IReadOnlyList<string> Profiles { get; private set; } = new[] { "Default" };
-        public string ActiveProfile { get; private set; } = "Default";
+        public IReadOnlyList<string> Profiles { get; private set; } = new[] { "Default", "profile_1" };
+        public string ActiveProfile { get; private set; } = "profile_1";
+        public bool IsReadOnly => ActiveProfile == "Default";
         public string ProfileDirectory => "C:\\Profiles";
         public AppConfig Current { get; private set; } = new();
         public int SaveCount { get; private set; }
@@ -310,7 +404,13 @@ public sealed class MainWindowViewModelTests
             RevertCount++;
             Current = ConfigManager.Clone(_saved);
         }
-        public void SwitchTo(string profileName) => ActiveProfile = profileName;
+        public string? UnloadableProfile { get; set; }
+        public void SwitchTo(string profileName)
+        {
+            if (profileName == UnloadableProfile)
+                throw new InvalidDataException("Invalid profile JSON");
+            ActiveProfile = profileName;
+        }
         public string? ValidateNewName(string? profileName) => null;
         public void Create(string profileName, AppConfig config) => Profiles = Profiles.Append(profileName).ToArray();
         public void Duplicate(string sourceProfileName, string profileName) => Profiles = Profiles.Append(profileName).ToArray();

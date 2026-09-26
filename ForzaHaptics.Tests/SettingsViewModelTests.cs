@@ -5,6 +5,27 @@ namespace ForzaHaptics.Tests;
 public sealed class SettingsViewModelTests
 {
     [Fact]
+    public void ReadOnlyDisablesEveryFieldAndPreservesGroupStateWhenUnlocked()
+    {
+        var config = new AppConfig();
+        config.Road.Enabled = false;
+        var settings = new SettingsViewModel(config) { IsReadOnly = true };
+        Assert.Equal(3, settings.Tabs.Count);
+        Assert.All(settings.Tabs.SelectMany(tab => tab.Groups).SelectMany(group => group.Fields),
+            field => Assert.False(field.IsEnabled));
+        var enabled = Assert.IsType<BoolSettingFieldViewModel>(Field(settings, "Road texture", "Enabled"));
+        enabled.Value = true;
+        Assert.False(settings.Working.Road.Enabled);
+        Assert.False(settings.IsDirty);
+        settings.IsReadOnly = false;
+        Assert.True(enabled.IsEnabled);
+        Assert.False(Field(settings, "Road texture", "Gain").IsEnabled);
+        enabled.Value = true;
+        Assert.True(settings.Working.Road.Enabled);
+        Assert.True(Field(settings, "Road texture", "Gain").IsEnabled);
+    }
+
+    [Fact]
     public void BuildsTabsGroupsAndEverySupportedEditorType()
     {
         var settings = new SettingsViewModel(new AppConfig());

@@ -44,14 +44,14 @@ public sealed class SettingsGroupViewModel : ObservableObject
 
     internal void Add(SettingFieldViewModel field) => _fields.Add(field);
 
-    internal void UpdateEnabledState()
+    internal void UpdateEnabledState(bool isReadOnly = false)
     {
         BoolSettingFieldViewModel? toggle = _fields
             .OfType<BoolSettingFieldViewModel>()
             .FirstOrDefault(field => field.PropertyName == "Enabled");
         bool enabled = toggle?.ModelValue is bool value ? value : true;
-        IsContentEnabled = enabled;
+        IsContentEnabled = enabled && !isReadOnly;
         foreach (SettingFieldViewModel field in _fields)
-            field.IsEnabled = field == toggle || enabled;
+            field.IsEnabled = !isReadOnly && (field == toggle || enabled);
     }
 }

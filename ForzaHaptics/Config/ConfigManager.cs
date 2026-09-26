@@ -26,15 +26,29 @@ public sealed class ConfigManager : IDisposable
     private System.Threading.Timer? _debounce;
     private double _ignoreWatcherUntil;
 
-    public string Path { get; private set; }
-    public AppConfig Current => Volatile.Read(ref _current);
+    public string? Path { get; private set; }
+    public bool IsReadOnly => Path == null;
+    // Never expose the factory configuration as a mutable shared object.
+    public AppConfig Current => IsReadOnly ? new AppConfig() : Volatile.Read(ref _current);
 
     /// <summary>The file was changed externally and reloaded (raised from a background thread).</summary>
     public event Action? ReloadedFromDisk;
 
-    private ConfigManager(string path)
+    private ConfigManager(string? path)
     {
         Path = path;
+    }
+
+    public static ConfigManager OpenDefault() => new(null);
+
+    public void SwitchToDefault()
+    {
+        lock (_sync)
+        {
+            StopWatching();
+            Path = null;
+            Volatile.Write(ref _current, new AppConfig());
+        }
     }
 
     /// <summary>Opens a configuration file; creates one with default values if it does not exist.</summary>
@@ -44,11 +58,11 @@ public sealed class ConfigManager : IDisposable
         if (!File.Exists(manager.Path))
         {
             if (!createIfMissing) throw new FileNotFoundException("Configuration file not found", manager.Path);
-            File.WriteAllText(manager.Path, Serialize(new AppConfig()));
+            File.WriteAllText(manager.Path!, Serialize(new AppConfig()));
             Log.Warn($"Configuration not found; created a default one: {manager.Path}");
         }
 
-        manager._current = Parse(ReadWithRetry(manager.Path));
+        manager._current = Parse(ReadWithRetry(manager.Path!));
         Log.Info($"Configuration: {manager.Path}");
         manager.StartWatching();
         return manager;
@@ -63,6 +77,7 @@ public sealed class ConfigManager : IDisposable
         {
             StopWatching();
             Path = path;
+            _ignoreWatcherUntil = 0;
             Volatile.Write(ref _current, cfg);
             StartWatching();
         }
@@ -72,9 +87,13 @@ public sealed class ConfigManager : IDisposable
     /// <summary>Applies settings in memory without writing the file. Throws if any value is invalid.</summary>
     public void Apply(AppConfig cfg)
     {
-        var copy = Clone(cfg);
-        copy.Validate();
-        Volatile.Write(ref _current, copy);
+        lock (_sync)
+        {
+            EnsureEditable();
+            var copy = Clone(cfg);
+            copy.Validate();
+            Volatile.Write(ref _current, copy);
+        }
     }
 
     /// <summary>Writes the current settings to the profile file.</summary>
@@ -82,15 +101,25 @@ public sealed class ConfigManager : IDisposable
     {
         lock (_sync)
         {
+            EnsureEditable();
             _ignoreWatcherUntil = Clock.Now + 1.0;
-            File.WriteAllText(Path, Serialize(Current));
+            File.WriteAllText(Path!, Serialize(Current));
         }
     }
 
     /// <summary>Discards unsaved changes by reloading the file.</summary>
     public void Revert()
     {
-        Volatile.Write(ref _current, Parse(ReadWithRetry(Path)));
+        lock (_sync)
+        {
+            if (IsReadOnly) return;
+            Volatile.Write(ref _current, Parse(ReadWithRetry(Path!)));
+        }
+    }
+
+    private void EnsureEditable()
+    {
+        if (IsReadOnly) throw new InvalidOperationException("Default is read-only. Duplicate it to create an editable profile.");
     }
 
     public static AppConfig Clone(AppConfig cfg) =>
@@ -103,24 +132,6 @@ public sealed class ConfigManager : IDisposable
         var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
         cfg.Validate();
         return cfg;
-    }
-
-    /// <summary>Locates the legacy config.json in the current, project (when run from bin\...), or executable directory.</summary>
-    public static string? FindLegacyConfig()
-    {
-        string cwd = System.IO.Path.Combine(Environment.CurrentDirectory, "config.json");
-        if (File.Exists(cwd)) return cwd;
-
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent)
-        {
-            string candidate = System.IO.Path.Combine(dir.FullName, "config.json");
-            if (File.Exists(System.IO.Path.Combine(dir.FullName, "ForzaHaptics.csproj")) && File.Exists(candidate))
-                return candidate;
-        }
-
-        string besideExe = System.IO.Path.Combine(AppContext.BaseDirectory, "config.json");
-        return File.Exists(besideExe) ? besideExe : null;
     }
 
     public static string ReadWithRetry(string path)
@@ -142,17 +153,23 @@ public sealed class ConfigManager : IDisposable
 
     private void StartWatching()
     {
+        if (IsReadOnly) return;
         string? dir = System.IO.Path.GetDirectoryName(Path);
         if (dir == null) return;
         _debounce = new System.Threading.Timer(_ => Reload(), null, Timeout.Infinite, Timeout.Infinite);
         var debounce = _debounce;
-        _watcher = new FileSystemWatcher(dir, System.IO.Path.GetFileName(Path))
+        _watcher = new FileSystemWatcher(dir, System.IO.Path.GetFileName(Path!))
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName | NotifyFilters.CreationTime,
         };
-        _watcher.Changed += (_, _) => debounce.Change(250, Timeout.Infinite);
-        _watcher.Created += (_, _) => debounce.Change(250, Timeout.Infinite);
-        _watcher.Renamed += (_, _) => debounce.Change(250, Timeout.Infinite);
+        void ScheduleReload()
+        {
+            try { debounce.Change(250, Timeout.Infinite); }
+            catch (ObjectDisposedException) { /* A profile switch disposed this watcher. */ }
+        }
+        _watcher.Changed += (_, _) => ScheduleReload();
+        _watcher.Created += (_, _) => ScheduleReload();
+        _watcher.Renamed += (_, _) => ScheduleReload();
         _watcher.EnableRaisingEvents = true;
     }
 
@@ -169,8 +186,8 @@ public sealed class ConfigManager : IDisposable
         string path;
         lock (_sync)
         {
-            if (Clock.Now < _ignoreWatcherUntil) return; // this is our own write
-            path = Path;
+            if (IsReadOnly || Clock.Now < _ignoreWatcherUntil) return;
+            path = Path!;
         }
         if (!File.Exists(path)) return;
 

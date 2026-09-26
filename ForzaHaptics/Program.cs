@@ -78,7 +78,7 @@ internal sealed class Options
           --list               show audio devices and DualSense HID devices
           --output auto|usb|bt select the output (defaults to the active profile)
           --port N             UDP port (defaults to the active profile)
-          --config FILE        settings file (defaults to the active profile in Configs)
+          --config FILE        explicit settings file (otherwise use the active profile, including built-in Default)
 
         """);
     }
@@ -123,8 +123,9 @@ internal static class Program
         ConfigManager config;
         try
         {
-            string path = opt.ConfigPath ?? ActiveProfilePath();
-            config = ConfigManager.Open(path, createIfMissing: opt.ConfigPath == null);
+            config = opt.ConfigPath != null
+                ? ConfigManager.Open(opt.ConfigPath, createIfMissing: false)
+                : ProfileStore.Open().OpenActive(out _);
         }
         catch (Exception ex)
         {
@@ -147,11 +148,6 @@ internal static class Program
         }
     }
 
-    private static string ActiveProfilePath()
-    {
-        var store = ProfileStore.Open();
-        return store.PathOf(store.ResolveActive());
-    }
 }
 
 /// <summary>The app is built as a windowed executable, so console modes attach to a terminal.</summary>
@@ -206,7 +202,9 @@ internal static class LiveRun
             cts.Cancel();
         };
 
-        Log.Info("Running. Press Ctrl+C to exit. The profile file can be edited live.");
+        Log.Info(config.IsReadOnly
+            ? "Running with built-in Default (read-only). Press Ctrl+C to exit."
+            : "Running. Press Ctrl+C to exit. The profile file can be edited live.");
         try
         {
             while (!cts.IsCancellationRequested)

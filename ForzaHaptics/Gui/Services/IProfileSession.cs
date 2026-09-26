@@ -5,6 +5,7 @@ public interface IProfileSession : IDisposable
 {
     IReadOnlyList<string> Profiles { get; }
     string ActiveProfile { get; }
+    bool IsReadOnly => ProfileStore.IsDefault(ActiveProfile);
     string ProfileDirectory { get; }
     AppConfig Current { get; }
 
@@ -42,6 +43,7 @@ public sealed class ProfileSession : IProfileSession
     public string ActiveProfile { get; private set; }
     public string ProfileDirectory => _store.Directory;
     public AppConfig Current => _config.Current;
+    public bool IsReadOnly => _config.IsReadOnly;
 
     public event EventHandler? ReloadedFromDisk;
 
@@ -56,7 +58,8 @@ public sealed class ProfileSession : IProfileSession
     public void SwitchTo(string profileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
-        _config.SwitchTo(_store.PathOf(profileName));
+        if (ProfileStore.IsDefault(profileName)) _config.SwitchToDefault();
+        else _config.SwitchTo(_store.PathOf(profileName));
         ActiveProfile = profileName;
         _store.SaveActive(profileName);
         Refresh();

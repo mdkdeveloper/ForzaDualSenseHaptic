@@ -138,7 +138,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _controller = controller;
 
-        Settings = new SettingsViewModel(_profiles.Current);
+        Settings = new SettingsViewModel(_profiles.Current) { IsReadOnly = _profiles.IsReadOnly };
         Settings.Changed += OnSettingChanged;
         _profiles.ReloadedFromDisk += OnReloadedFromDisk;
 
@@ -158,7 +158,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     public ObservableCollection<string> Profiles { get; } = new();
     public ObservableCollection<LogEntryViewModel> LogEntries { get; } = new();
     public bool ControlsEnabled => !IsBusy;
-    public bool CanDeleteProfile => Profiles.Count > 1 && !IsBusy;
+    public bool CanEditProfile => !_profiles.IsReadOnly && !IsBusy;
+    public bool CanDeleteProfile => Profiles.Count > 1 && CanEditProfile;
     public bool IsEngineStopped => !IsEngineRunning;
 
     public async Task InitializeAsync() => await StartEngineAsync();
@@ -251,6 +252,10 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(ControlsEnabled));
         OnPropertyChanged(nameof(CanDeleteProfile));
+        OnPropertyChanged(nameof(CanEditProfile));
+        SaveCommand.NotifyCanExecuteChanged();
+        RenameProfileCommand.NotifyCanExecuteChanged();
+        DeleteProfileCommand.NotifyCanExecuteChanged();
         RefreshStatus();
     }
 
@@ -283,9 +288,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             await StartEngineAsync();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanEditProfile))]
     private void Save()
     {
+        if (!CanEditProfile)
+            return;
+
         if (Settings.HasValidationErrors)
         {
             Log.Warn("Fix invalid settings before saving.");
@@ -335,7 +343,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         Log.Warn($"Profile '{_profiles.ActiveProfile}' disappeared; switching profiles.");
         SetDirty(false);
         if (Profiles.Count > 0)
-            _ = SwitchProfileAsync(Profiles[0]);
+            _ = RecoverProfileAsync();
     }
 
     [RelayCommand]
@@ -367,9 +375,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             $"Copied profile '{source}' as '{name}'.");
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanEditProfile))]
     private async Task RenameProfileAsync()
     {
+        if (!CanEditProfile)
+            return;
+
         if (!await ConfirmLeaveAsync())
             return;
         string oldName = _profiles.ActiveProfile;
@@ -390,7 +401,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanDeleteProfile))]
     private async Task DeleteProfileAsync()
     {
         if (!CanDeleteProfile || !await _dialogs.ConfirmProfileDeletionAsync(_profiles.ActiveProfile))
@@ -402,7 +413,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             _profiles.Delete(oldName);
             Log.Info($"Profile '{oldName}' was moved to the Recycle Bin.");
             SetDirty(false);
-            await SwitchProfileAsync(_profiles.Profiles[0]);
+            await RecoverProfileAsync();
         }
         catch (Exception exception)
         {
@@ -463,6 +474,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private void OnSettingChanged(object? sender, SettingChangedEventArgs eventArgs)
     {
+        if (_profiles.IsReadOnly)
+            return;
+
         try
         {
             _profiles.Apply(Settings.Working);
@@ -480,7 +494,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private void OnReloadedFromDisk(object? sender, EventArgs eventArgs) => _dispatcher.Post(() =>
     {
-        if (IsDirty)
+        if (IsDirty && !_profiles.IsReadOnly)
         {
             try { _profiles.Apply(Settings.Working); } catch { /* Keep the last valid settings. */ }
             Log.Warn("The profile file changed externally; unsaved window changes take precedence.");
@@ -499,7 +513,16 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         await SwitchProfileAsync(profileName);
     }
 
-    private async Task SwitchProfileAsync(string profileName)
+    private async Task RecoverProfileAsync()
+    {
+        string? initialProfile = _profiles.Profiles.FirstOrDefault(name =>
+            string.Equals(name, ProfileStore.InitialProfileName, StringComparison.OrdinalIgnoreCase));
+        if (initialProfile != null && await SwitchProfileAsync(initialProfile))
+            return;
+        await SwitchProfileAsync(ProfileStore.DefaultName);
+    }
+
+    private async Task<bool> SwitchProfileAsync(string profileName)
     {
         AppConfig before = _profiles.Current;
         try
@@ -510,7 +533,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             Log.Error($"Failed to open profile '{profileName}': {exception.Message}");
             FillProfiles();
-            return;
+            return false;
         }
 
         Settings.Load(_profiles.Current);
@@ -518,6 +541,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         FillProfiles();
         if (_engine.IsRunning && NeedsRestart(before, _profiles.Current))
             await StartEngineAsync();
+        return true;
     }
 
     private async Task<bool> ConfirmLeaveAsync()
@@ -572,6 +596,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private void FillProfiles()
     {
+        Settings.IsReadOnly = _profiles.IsReadOnly;
         _suppressProfileChange = true;
         try
         {
@@ -585,6 +610,10 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             _suppressProfileChange = false;
         }
         OnPropertyChanged(nameof(CanDeleteProfile));
+        OnPropertyChanged(nameof(CanEditProfile));
+        SaveCommand.NotifyCanExecuteChanged();
+        RenameProfileCommand.NotifyCanExecuteChanged();
+        DeleteProfileCommand.NotifyCanExecuteChanged();
     }
 
     private void SelectProfile(string profileName)

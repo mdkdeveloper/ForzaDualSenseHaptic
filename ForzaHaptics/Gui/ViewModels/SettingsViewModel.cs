@@ -16,6 +16,7 @@ public sealed class SettingsViewModel : ObservableObject
     private readonly List<SettingsGroupViewModel> _groups = new();
     private readonly ObservableCollection<SettingsTabViewModel> _tabs = new();
     private bool _isLoading;
+    private bool _isReadOnly;
     private bool _isDirty;
     private bool _restartRequired;
     private AppConfig _working = new();
@@ -45,6 +46,16 @@ public sealed class SettingsViewModel : ObservableObject
     {
         get => _restartRequired;
         private set => SetProperty(ref _restartRequired, value);
+    }
+
+    public bool IsReadOnly
+    {
+        get => _isReadOnly;
+        set
+        {
+            if (SetProperty(ref _isReadOnly, value))
+                UpdateEnabledGroups();
+        }
     }
 
     public bool HasValidationErrors => _fields.Any(item => item.HasError);
@@ -189,7 +200,7 @@ public sealed class SettingsViewModel : ObservableObject
     private void UpdateEnabledGroups()
     {
         foreach (SettingsGroupViewModel group in _groups)
-            group.UpdateEnabledState();
+            group.UpdateEnabledState(IsReadOnly);
     }
 }
 

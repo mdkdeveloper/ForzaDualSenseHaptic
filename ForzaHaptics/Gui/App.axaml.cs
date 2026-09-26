@@ -47,8 +47,7 @@ public sealed class App : Application
         {
             Log.Info("ForzaHaptics — Forza Horizon 6 telemetry → DualSense haptics");
             ProfileStore store = ProfileStore.Open();
-            string profile = store.ResolveActive();
-            config = OpenProfile(store, ref profile);
+            config = store.OpenActive(out string profile);
             var session = new ProfileSession(store, config, profile);
             config = null; // Ownership moved to ProfileSession.
 
@@ -112,30 +111,4 @@ public sealed class App : Application
         }
     }
 
-    private static ConfigManager OpenProfile(ProfileStore store, ref string profile)
-    {
-        try
-        {
-            return ConfigManager.Open(store.PathOf(profile), createIfMissing: false);
-        }
-        catch (Exception exception)
-        {
-            Log.Error($"Profile '{profile}' could not be opened: {exception.Message}");
-            string failed = profile;
-            foreach (string other in store.List().Where(name => name != failed))
-            {
-                try
-                {
-                    ConfigManager config = ConfigManager.Open(store.PathOf(other), createIfMissing: false);
-                    profile = other;
-                    return config;
-                }
-                catch
-                {
-                    // Try the next profile.
-                }
-            }
-            throw;
-        }
-    }
 }

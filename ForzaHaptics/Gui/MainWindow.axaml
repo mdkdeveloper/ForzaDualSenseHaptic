@@ -113,6 +113,8 @@
                     <Button Content="Rename" Margin="0,0,6,0" Command="{Binding RenameProfileCommand}" />
                     <Button Content="Delete" Margin="0,0,6,0" Command="{Binding DeleteProfileCommand}"
                             IsEnabled="{Binding CanDeleteProfile}" ToolTip.Tip="Move the profile file to the Recycle Bin" />
+                    <TextBlock Text="Default is read-only. Duplicate it to customize." IsVisible="{Binding Settings.IsReadOnly}"
+                               VerticalAlignment="Center" Margin="6,0,12,0" Classes="secondary" />
                     <Button Content="Open folder…" Command="{Binding OpenProfilesFolderCommand}"
                             ToolTip.Tip="Open the Configs folder in File Explorer" />
                 </WrapPanel>

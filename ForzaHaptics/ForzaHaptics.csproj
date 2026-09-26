@@ -29,7 +29,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="config.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Seed is embedded so build/publish never overwrite an edited runtime profile. -->
+    <EmbeddedResource Include="Configs/profile_1.json" LogicalName="ForzaHaptics.Configs.profile_1.json" />
     <AvaloniaResource Include="Assets/app.ico" />
   </ItemGroup>
 

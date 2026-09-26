@@ -72,6 +72,9 @@ public abstract class SettingFieldViewModel : ObservableObject
 
     protected bool TrySetModelValue(object? value)
     {
+        if (_settings.IsReadOnly)
+            return false;
+
         object owner = GetOwner();
         object? previous = _property.GetValue(owner);
         if (ValuesEqual(previous, value))

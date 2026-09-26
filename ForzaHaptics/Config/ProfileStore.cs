@@ -3,14 +3,11 @@ using ForzaHaptics.Util;
 
 namespace ForzaHaptics;
 
-/// <summary>
-/// Settings profiles: *.json files in the Configs folder next to the executable. The list is built by scanning
-/// the folder, so a file copied there manually appears after Refresh or a restart.
-/// The active profile is stored in ForzaHaptics.settings.json next to the executable.
-/// </summary>
+/// <summary>Editable JSON profiles beside the executable and a virtual, immutable factory Default.</summary>
 public sealed class ProfileStore
 {
-    private const string DefaultName = "Default";
+    public const string DefaultName = "Default";
+    public const string InitialProfileName = "profile_1";
     private readonly string _settingsPath;
 
     public string Directory { get; }
@@ -21,48 +18,84 @@ public sealed class ProfileStore
         _settingsPath = settingsPath;
     }
 
-    /// <summary>The Configs folder next to the executable; imports a legacy config.json as Default on first launch.</summary>
-    public static ProfileStore Open()
+    public static bool IsDefault(string name) => string.Equals(name, DefaultName, StringComparison.OrdinalIgnoreCase);
+
+    public static ProfileStore Open(string? baseDirectory = null)
     {
-        string baseDir = AppContext.BaseDirectory;
+        string baseDir = Path.GetFullPath(baseDirectory ?? AppContext.BaseDirectory);
         var store = new ProfileStore(Path.Combine(baseDir, "Configs"), Path.Combine(baseDir, "ForzaHaptics.settings.json"));
         System.IO.Directory.CreateDirectory(store.Directory);
-
-        if (store.List().Count == 0)
+        store.MigrateDefaultFiles();
+        if (!store.Exists(InitialProfileName))
         {
-            string target = store.PathOf(DefaultName);
-            string? legacy = ConfigManager.FindLegacyConfig();
-            if (legacy != null)
+            try
             {
-                File.Copy(legacy, target);
-                Log.Info($"Created profile {DefaultName} from {legacy}");
+                using var seed = typeof(ProfileStore).Assembly.GetManifestResourceStream("ForzaHaptics.Configs.profile_1.json")
+                    ?? throw new InvalidOperationException("The bundled profile_1 template is missing.");
+                using var target = new FileStream(store.PathOf(InitialProfileName), FileMode.CreateNew, FileAccess.Write);
+                seed.CopyTo(target);
             }
-            else
+            catch (Exception ex)
             {
-                File.WriteAllText(target, ConfigManager.Serialize(new AppConfig()));
-                Log.Info($"Created profile {DefaultName} with default settings");
+                Log.Warn($"Could not create profile_1; factory Default remains available: {ex.Message}");
             }
         }
         return store;
     }
 
-    public IReadOnlyList<string> List() =>
-        System.IO.Directory.EnumerateFiles(Directory, "*.json")
-            .Select(p => Path.GetFileNameWithoutExtension(p))
-            .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)
-            .ToList();
+    private IEnumerable<string> ProfileFiles() => System.IO.Directory.EnumerateFiles(Directory)
+        .Where(p => string.Equals(Path.GetExtension(p), ".json", StringComparison.OrdinalIgnoreCase));
 
-    public string PathOf(string name) => Path.Combine(Directory, name + ".json");
+    public IReadOnlyList<string> List() => new[] { DefaultName }.Concat(ProfileFiles()
+        .Select(Path.GetFileNameWithoutExtension)
+        .Where(n => n != null && !IsDefault(n))
+        .Select(n => n!)
+        .OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase)).ToList();
 
-    public bool Exists(string name) => File.Exists(PathOf(name));
+    public string PathOf(string name)
+    {
+        ValidateFileName(name);
+        if (IsDefault(name)) throw new InvalidOperationException("Default is built in and has no file path.");
+        return ProfileFiles().FirstOrDefault(p => string.Equals(Path.GetFileNameWithoutExtension(p), name, StringComparison.OrdinalIgnoreCase))
+            ?? Path.Combine(Directory, name + ".json");
+    }
 
-    /// <summary>The saved active profile if it still exists; otherwise the first profile alphabetically.</summary>
+    public bool Exists(string name)
+    {
+        if (IsDefault(name)) return true;
+        try { return File.Exists(PathOf(name)); }
+        catch (ArgumentException) { return false; }
+    }
+
+    public ConfigManager OpenProfile(string name) => IsDefault(name)
+        ? ConfigManager.OpenDefault() : ConfigManager.Open(PathOf(name), createIfMissing: false);
+
+    /// <summary>Open the saved selection, then profile_1, then the immutable factory defaults.</summary>
+    public ConfigManager OpenActive(out string name)
+    {
+        foreach (string candidate in new[] { LoadActive(), InitialProfileName, DefaultName }
+                     .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var manager = OpenProfile(candidate);
+                name = IsDefault(candidate) ? DefaultName : Path.GetFileNameWithoutExtension(manager.Path!);
+                SaveActive(name);
+                return manager;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Could not open profile '{candidate}'; trying the next fallback: {ex.Message}");
+            }
+        }
+        name = DefaultName;
+        return ConfigManager.OpenDefault();
+    }
+
     public string ResolveActive()
     {
-        string? saved = LoadActive();
-        if (saved != null && Exists(saved)) return saved;
-        var all = List();
-        return all.Contains(DefaultName) ? DefaultName : all[0];
+        using var manager = OpenActive(out string name);
+        return name;
     }
 
     public void SaveActive(string name)
@@ -71,10 +104,7 @@ public sealed class ProfileStore
         {
             File.WriteAllText(_settingsPath, JsonSerializer.Serialize(new Settings { ActiveProfile = name }, ConfigManager.JsonOptions));
         }
-        catch (Exception ex)
-        {
-            Log.Warn($"Could not remember the active profile: {ex.Message}");
-        }
+        catch (Exception ex) { Log.Warn($"Could not remember the active profile: {ex.Message}"); }
     }
 
     private string? LoadActive()
@@ -84,34 +114,86 @@ public sealed class ProfileStore
             if (!File.Exists(_settingsPath)) return null;
             return JsonSerializer.Deserialize<Settings>(File.ReadAllText(_settingsPath), ConfigManager.JsonOptions)?.ActiveProfile;
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Warn($"Could not read the active profile selection: {ex.Message}");
             return null;
         }
     }
 
-    /// <summary>Returns an error message if the name is unsuitable for a profile file; otherwise null.</summary>
+    private void MigrateDefaultFiles()
+    {
+        string? active = LoadActive();
+        foreach (string legacy in ProfileFiles().Where(p => IsDefault(Path.GetFileNameWithoutExtension(p))).ToArray())
+        {
+            try
+            {
+                string name = InitialProfileName;
+                for (int suffix = 1; Exists(name); suffix++) name = $"Default_imported_{suffix}";
+                // Move without parsing or reserializing: even malformed files and comments are preserved.
+                File.Move(legacy, PathOf(name));
+                if (active != null && IsDefault(active))
+                {
+                    SaveActive(name);
+                    active = name;
+                }
+                Log.Info($"Preserved legacy Default profile as {name}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warn($"Could not migrate legacy Default; the original is preserved at '{legacy}': {ex.Message}");
+            }
+        }
+    }
+
+    private static void ValidateFileName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name != name.Trim() || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || name.Contains('/') || name.Contains('\\') || name.EndsWith('.') || name is "." or "..")
+            throw new ArgumentException("Name contains invalid characters", nameof(name));
+    }
+
     public string? CheckNewName(string? name)
     {
-        name = name?.Trim();
-        if (string.IsNullOrEmpty(name)) return "Name cannot be empty";
-        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name.EndsWith('.'))
-            return "Name contains invalid characters";
+        if (string.IsNullOrWhiteSpace(name)) return "Name cannot be empty";
+        try { ValidateFileName(name); }
+        catch (ArgumentException ex) { return ex.Message; }
         if (Exists(name)) return $"Profile \"{name}\" already exists";
         return null;
     }
 
-    public void Create(string name, AppConfig config) => File.WriteAllText(PathOf(name), ConfigManager.Serialize(config));
+    private void EnsureNewName(string name)
+    {
+        string? error = CheckNewName(name);
+        if (error != null) throw new InvalidOperationException(error);
+    }
 
-    /// <summary>Copies the file as-is, including comments.</summary>
-    public void Duplicate(string source, string name) => File.Copy(PathOf(source), PathOf(name));
+    public void Create(string name, AppConfig config)
+    {
+        EnsureNewName(name);
+        var copy = ConfigManager.Clone(config);
+        copy.Validate();
+        using var writer = new StreamWriter(new FileStream(PathOf(name), FileMode.CreateNew, FileAccess.Write));
+        writer.Write(ConfigManager.Serialize(copy));
+    }
 
-    public void Rename(string oldName, string newName) => File.Move(PathOf(oldName), PathOf(newName));
+    public void Duplicate(string source, string name)
+    {
+        EnsureNewName(name);
+        if (IsDefault(source)) Create(name, new AppConfig());
+        else File.Copy(PathOf(source), PathOf(name));
+    }
+
+    public void Rename(string oldName, string newName)
+    {
+        if (IsDefault(oldName)) throw new InvalidOperationException("Default cannot be renamed.");
+        EnsureNewName(newName);
+        File.Move(PathOf(oldName), PathOf(newName));
+    }
 
     public void Delete(string name)
     {
-        if (List().Count <= 1) throw new InvalidOperationException("The last profile cannot be deleted");
-        // Send it to the Recycle Bin so an accidental deletion can be recovered.
+        if (IsDefault(name)) throw new InvalidOperationException("Default cannot be deleted.");
         Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(PathOf(name),
             Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
             Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
