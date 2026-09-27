@@ -4,6 +4,7 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.VisualTree;
 using ForzaHaptics.Controllers;
+using ForzaHaptics.Emulation;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Gui.ViewModels;
 
@@ -326,7 +327,7 @@ public sealed class MainWindowViewModelTests
 
         await viewModel.DisconnectControllerCommand.ExecuteAsync(null);
 
-        Assert.Equal(new[] { "suspend", "resume" }, operations);
+        Assert.Equal(new[] { "start", "suspend", "resume" }, operations);
         Assert.True(viewModel.IsEngineRunning);
         Assert.Equal(0, engine.StopCount);
 
@@ -478,17 +479,112 @@ public sealed class MainWindowViewModelTests
         BatteryPercent = battery,
         CanDisconnect = transport == ControllerTransport.Bluetooth,
     };
+    [Fact]
+    public async Task XboxAutostartIsIndependentAndRecoveryPrecedesEnabling()
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = false, AutoStartXboxEmulation = true };
+        var engine = new FakeEngineFacade();
+        var xbox = new FakeXboxEmulationService();
+        using var vm = CreateViewModel(profiles, engine, emulation: xbox);
+        await vm.InitializeAsync();
+        Assert.Equal(new[] { "recover", "xbox:True" }, xbox.Operations);
+        Assert.True(vm.IsXboxEmulationEnabled);
+        Assert.Equal(0, engine.StartCount);
+        vm.AutoStartXboxEmulation = false;
+        vm.SelectedProfile = "Default";
+        Assert.False(profiles.AutoStartXboxEmulation);
+        Assert.True(xbox.IsEnabled);
+        Assert.False(vm.IsDirty);
+    }
+
+    [Fact]
+    public async Task HapticsSuppressesXboxBeforeEveryStartAndReleasesOnlyAfterStop()
+    {
+        var operations = new List<string>();
+        var engine = new FakeEngineFacade { Operations = operations };
+        var xbox = new FakeXboxEmulationService { Operations = operations };
+        using var vm = CreateViewModel(engine: engine, emulation: xbox);
+        await vm.InitializeAsync();
+        await vm.RestartOutputCommand.ExecuteAsync(null);
+        vm.IsTestEnabled = true;
+        await vm.ApplyModesCommand.ExecuteAsync(null);
+        await vm.StartStopCommand.ExecuteAsync(null);
+        Assert.Equal(new[] { "recover", "haptics:True", "start", "haptics:True", "start",
+            "haptics:True", "start", "stop", "haptics:False" }, operations);
+        Assert.False(xbox.IsEnabled);
+    }
+
+    [Fact]
+    public async Task XboxToggleDoesNotStartOrStopTelemetry()
+    {
+        var engine = new FakeEngineFacade();
+        var xbox = new FakeXboxEmulationService();
+        using var vm = CreateViewModel(engine: engine, emulation: xbox);
+        await vm.InitializeAsync();
+        vm.IsXboxEmulationEnabled = true;
+        Assert.True(xbox.IsEnabled);
+        vm.IsXboxEmulationEnabled = false;
+        Assert.False(xbox.IsEnabled);
+        Assert.Equal(1, engine.StartCount);
+        Assert.Equal(0, engine.StopCount);
+    }
+
+    [Fact]
+    public async Task FailedEngineStartRestoresXboxRumbleOwnership()
+    {
+        var operations = new List<string>();
+        var engine = new FakeEngineFacade { Operations = operations, StartSucceeds = false };
+        var xbox = new FakeXboxEmulationService { Operations = operations };
+        using var vm = CreateViewModel(engine: engine, emulation: xbox);
+        await vm.InitializeAsync();
+        Assert.Equal(new[] { "recover", "haptics:True", "start", "haptics:False" }, operations);
+        Assert.False(vm.IsEngineRunning);
+    }
+
+    [Fact]
+    public void ShutdownContinuesAfterRumbleResetFailsAndDisposesEngineBeforeXbox()
+    {
+        var operations = new List<string>();
+        var engine = new FakeEngineFacade { Operations = operations };
+        var xbox = new FakeXboxEmulationService { Operations = operations, ThrowOnPriority = true };
+        var controller = new FakeControllerService();
+        var vm = CreateViewModel(engine: engine, controller: controller, emulation: xbox);
+        vm.Dispose();
+        vm.Dispose();
+        Assert.Equal(new[] { "haptics:True", "engine:dispose", "xbox:dispose" }, operations);
+        Assert.Equal(1, controller.DisposeCount);
+    }
+
+    [Fact]
+    public async Task ClosingDuringRecoveryDoesNotAutostartDisposedServices()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var profiles = new FakeProfileSession { AutoStartListening = true, AutoStartXboxEmulation = true };
+        var engine = new FakeEngineFacade();
+        var xbox = new FakeXboxEmulationService { InitializeCompletion = completion.Task };
+        var vm = CreateViewModel(profiles, engine, emulation: xbox);
+        var initialize = vm.InitializeAsync();
+        vm.Dispose();
+        completion.SetResult();
+        await initialize;
+        await vm.StartStopCommand.ExecuteAsync(null);
+        await vm.InitializeAsync();
+        Assert.Equal(0, engine.StartCount);
+        Assert.DoesNotContain("xbox:True", xbox.Operations);
+    }
+
     private static MainWindowViewModel CreateViewModel(
         FakeProfileSession? profiles = null,
         FakeEngineFacade? engine = null,
         FakeDialogService? dialogs = null,
-        FakeControllerService? controller = null) => new(
+        FakeControllerService? controller = null,
+        IXboxEmulationService? emulation = null) => new(
             profiles ?? new FakeProfileSession(),
             engine ?? new FakeEngineFacade(),
             dialogs ?? new FakeDialogService(),
             new FakeShellService(),
             new ImmediateDispatcher(),
-            controller: controller);
+            controller: controller, emulation: emulation);
 
     private static SettingFieldViewModel Field(SettingsViewModel settings, string groupTitle, string propertyName) =>
         settings.Tabs.SelectMany(tab => tab.Groups)
@@ -503,6 +599,7 @@ public sealed class MainWindowViewModelTests
         public string ActiveProfile { get; private set; } = "profile_1";
         public bool IsReadOnly => ActiveProfile == "Default";
         public bool AutoStartListening { get; set; } = true;
+        public bool AutoStartXboxEmulation { get; set; }
         public string ProfileDirectory => "C:\\Profiles";
         public AppConfig Current { get; private set; } = new();
         public int SaveCount { get; private set; }
@@ -547,6 +644,7 @@ public sealed class MainWindowViewModelTests
         public float PeakLeft => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.25f;
         public float PeakRight => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.5f;
         public string ActiveEffects => string.Empty;
+        public bool StartSucceeds { get; init; } = true;
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public EngineOptions? LastOptions { get; private set; }
@@ -554,10 +652,11 @@ public sealed class MainWindowViewModelTests
 
         public Task<bool> StartAsync(EngineOptions options, CancellationToken cancellationToken = default)
         {
+            Operations?.Add("start");
             StartCount++;
             LastOptions = options;
-            IsRunning = true;
-            return Task.FromResult(true);
+            IsRunning = StartSucceeds;
+            return Task.FromResult(StartSucceeds);
         }
 
         public Task StopAsync(CancellationToken cancellationToken = default)
@@ -581,7 +680,29 @@ public sealed class MainWindowViewModelTests
         }
 
         public string BuildStatus() => IsRunning ? "Running" : "Stopped";
-        public void Dispose() { }
+        public void Dispose() => Operations?.Add("engine:dispose");
+    }
+
+    private sealed class FakeXboxEmulationService : IXboxEmulationService
+    {
+        public bool IsEnabled { get; private set; }
+        public string Status => IsEnabled ? "Connected" : "Disabled";
+        public string? Error => null;
+        public bool IsBusy => false;
+        public List<string> Operations { get; init; } = new();
+        public Task InitializeCompletion { get; init; } = Task.CompletedTask;
+        public Task InitializeAsync() { Operations.Add("recover"); return InitializeCompletion; }
+        public Task SetEnabledAsync(bool value) { IsEnabled = value; Operations.Add($"xbox:{value}"); return Task.CompletedTask; }
+        public Task CheckAgainAsync() => Task.CompletedTask;
+        public bool ThrowOnPriority { get; set; }
+        public void SetHapticsActive(bool value)
+        {
+            Operations.Add($"haptics:{value}");
+            if (ThrowOnPriority) throw new IOException("Controller disappeared");
+        }
+        public Task SuspendAsync() { Operations.Add("xbox:suspend"); return Task.CompletedTask; }
+        public void Resume() => Operations.Add("xbox:resume");
+        public void Dispose() => Operations.Add("xbox:dispose");
     }
 
     private sealed class FakeDialogService : IUserDialogService
@@ -626,6 +747,7 @@ public sealed class MainWindowViewModelTests
     private sealed class FakeShellService : IPlatformShellService
     {
         public void OpenDirectory(string path) { }
+        public void OpenUrl(string url) { }
     }
 
     private sealed class ImmediateDispatcher : IUiDispatcher

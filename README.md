@@ -89,6 +89,30 @@ The UI is built with Avalonia and an MVVM architecture. Avalonia makes the prese
 - Root-level `config.json` is no longer discovered or imported automatically. An existing `Configs/Default.json` is preserved by migration to `profile_1`, or a unique `Default_imported_N` when that name is occupied; the saved selection follows the migrated profile.
 - The last selection is restored at startup. If it is missing or invalid, the app logs the problem and tries `profile_1`, then built-in Default. Explicit `--config FILE` remains supported and never changes built-in Default.
 
+## Xbox 360 emulation
+
+The **Xbox 360 emulation** switch creates one virtual Xbox controller from the active DualSense or DualSense Edge. It works independently of Forza telemetry: use Xbox input alone, telemetry haptics alone, or both together. **Enable Xbox emulation on startup** is a separate, immediately saved application preference, disabled by default. Start/Stop controls telemetry, not emulation. The physical controller panel continues to show its real battery and USB/Bluetooth connection; the Xbox row shows virtual-device status.
+
+Install both [HidHide](https://github.com/nefarius/HidHide/releases) and [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases) from their official releases. The app checks their APIs and offers download links and **Check again** when setup is incomplete. Installation is manual; restart Windows if the installer requests it. ViGEmBus is a retired dependency: see its [end-of-life statement](https://docs.nefarius.at/projects/ViGEm/End-of-Life/). NuGet supplies the pinned `Nefarius.ViGEm.Client 1.21.256` client library, not the kernel driver.
+
+Enable emulation before launching the game. ForzaHaptics permits its own executable in HidHide, creates the Xbox device, and hides only the selected physical HID controller. It does not hide the USB sound device. Games with an already-open controller handle may need to be restarted or the controller reconnected for hiding to take effect. Disable other Xbox emulators such as Steam Input, DSX or DS4Windows for this controller to avoid duplicate virtual devices. HidHide's inverted application list is not supported; the error explains how to correct it. If HidHide is inactive with other devices already in its blacklist, configure/enable that list in HidHide first so enabling our controller does not silently hide unrelated devices.
+
+Buttons map by position: Cross/Circle/Square/Triangle to A/B/X/Y, L1/R1 to LB/RB, Create/Options to Back/Start, and PS to Guide. Sticks, stick clicks, D-pad and L2/R2 map to their Xbox equivalents. No additional deadzone or response curve is applied. Touchpad, gyro, microphone mute and extra Edge buttons have no separate Xbox mapping. Basic and enhanced Bluetooth input are supported, including transitions when output enables enhanced reports; basic reports have no battery or trigger-effect feedback. Bluetooth enhanced mode can persist until the controller reconnects.
+
+Game vibration is forwarded as standard DualSense HID rumble over USB or Bluetooth and does not require a four-channel audio endpoint. A running telemetry session, including waiting for packets, simulation, replay and motor/trigger tests, has absolute priority: Xbox rumble is stopped and incoming rumble commands are discarded. After Stop, only new game-rumble commands take effect. Existing experimental Bluetooth PCM limitations still apply to telemetry haptics. Xbox emulation provides ordinary two-motor rumble, not Xbox impulse-trigger effects.
+
+Disconnected controllers remove the virtual Xbox; reconnection restores it while the switch remains enabled. Input older than 300 ms releases virtual buttons/axes and stops rumble. Turning emulation off or closing the app removes the virtual device and reverses only the HidHide entries added by this app. Preexisting hidden-device entries remain in place. Only one ForzaHaptics instance can manage emulation at a time.
+
+HidHide changes are journaled to `%LOCALAPPDATA%\ForzaHaptics\hidhide-recovery.json` before application and recovered before the next startup attempt. After a crash, the physical controller can remain hidden until ForzaHaptics is reopened. If recovery fails, close other HidHide configuration tools and select **Check again**. To recover manually, open **HidHide Configuration Client**, uncheck the affected DualSense in **Devices**, or disable **Enable device hiding** temporarily; the latter affects every hidden device. Do not delete the recovery journal before recovery completes. Closing the app cannot make a controller visible if another tool had already hidden it.
+
+Hardware acceptance checks (perform with both USB and Bluetooth):
+
+1. With telemetry stopped, enable emulation and verify the game sees one Xbox, with correct axes/buttons and two-motor vibration.
+2. Start telemetry, including a session with no incoming packets, and verify Xbox rumble stops. With valid Forza telemetry, verify native haptics and adaptive triggers still work.
+3. Stop telemetry and trigger a new rumble event; verify ordinary vibration resumes without replaying old feedback.
+4. Disconnect/reconnect the controller, switch transport, disable emulation, and close the app; verify virtual-device removal/recreation and restoration of physical visibility.
+5. Verify missing-driver messages, independent startup preferences, and recovery after an interrupted emulation session. Ordinary automated tests use fake adapters and do not change installed drivers or HidHide settings.
+
 ## Command line
 
 Console modes remain available. Use `dotnet run --project ForzaHaptics -- --simulate` (application arguments follow `--`) or run `ForzaHaptics.exe --console` from a terminal. Settings come from the active profile unless `--config FILE` is supplied.
@@ -136,6 +160,7 @@ ForzaHaptics/
   Haptics/                         telemetry processing, DSP, impulses, and two-actuator signal synthesis
   Output/                          WASAPI, Bluetooth HID, trigger HID, and WAV output
   Controllers/                     independent HID presence/battery monitoring and Windows Bluetooth disconnect
+  Emulation/                       Xbox virtual input, HidHide recovery, native rumble and telemetry priority
   Triggers/                        physical input gating, event processing, 100 Hz runtime and effect encoding
   Config/                          profile storage, load/save, hot reload, and live configuration updates
   Gui/App.axaml(.cs)               Avalonia application and Fluent theme bootstrap

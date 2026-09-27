@@ -6,6 +6,7 @@ public interface IProfileSession : IDisposable
     IReadOnlyList<string> Profiles { get; }
     string ActiveProfile { get; }
     bool AutoStartListening { get; set; }
+    bool AutoStartXboxEmulation { get; set; }
     bool IsReadOnly => ProfileStore.IsDefault(ActiveProfile);
     string ProfileDirectory { get; }
     AppConfig Current { get; }
@@ -47,6 +48,11 @@ public sealed class ProfileSession : IProfileSession
     {
         get => _store.AutoStartListening;
         set => _store.AutoStartListening = value;
+    }
+    public bool AutoStartXboxEmulation
+    {
+        get => _store.AutoStartXboxEmulation;
+        set => _store.AutoStartXboxEmulation = value;
     }
     public string ProfileDirectory => _store.Directory;
     public AppConfig Current => _config.Current;

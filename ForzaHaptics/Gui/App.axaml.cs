@@ -4,6 +4,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using ForzaHaptics.Controllers;
+using ForzaHaptics.Emulation;
 using ForzaHaptics.Gui.Dialogs;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Gui.ViewModels;
@@ -43,36 +44,50 @@ public sealed class App : Application
         Log.Message += Collect;
 
         ConfigManager? config = null;
+        ProfileSession? session = null;
+        HapticEngineFacade? engine = null;
+        ControllerService? controller = null;
+        XboxEmulationService? emulation = null;
+        MainWindowViewModel? viewModel = null;
         try
         {
             Log.Info("ForzaHaptics — Forza Horizon 6 telemetry → DualSense haptics");
             ProfileStore store = ProfileStore.Open();
             config = store.OpenActive(out string profile);
-            var session = new ProfileSession(store, config, profile);
+            session = new ProfileSession(store, config, profile);
             config = null; // Ownership moved to ProfileSession.
 
             MainWindow? window = null;
             var dialogs = new AvaloniaUserDialogService(() => window);
-            ControllerService? controller = null;
-            var engine = new HapticEngineFacade(() => session.Current, () => session.Revision,
+            engine = new HapticEngineFacade(() => session.Current, () => session.Revision,
                 () => controller?.Snapshot ?? ControllerSnapshot.Disconnected);
             controller = new ControllerService(
                 () => session.Current.Output,
                 () => engine.IsRunning ? engine.ActiveControllerDeviceId : null);
-            var viewModel = new MainWindowViewModel(
+            emulation = new XboxEmulationService(controller);
+            viewModel = new MainWindowViewModel(
                 session,
                 engine,
                 dialogs,
                 new WindowsPlatformShellService(),
                 new AvaloniaUiDispatcher(),
                 earlyLog,
-                controller);
+                controller, emulation);
             window = new MainWindow(viewModel);
             desktop.MainWindow = window;
         }
         catch (Exception exception)
         {
-            config?.Dispose();
+            if (viewModel is not null)
+                Cleanup(viewModel);
+            else
+            {
+                Cleanup(engine);
+                Cleanup(emulation);
+                Cleanup(controller);
+                Cleanup(session);
+            }
+            Cleanup(config);
             desktop.MainWindow = new MessageDialog(
                 "ForzaHaptics — Error",
                 $"Failed to load settings:{Environment.NewLine}{exception.Message}",
@@ -84,6 +99,12 @@ public sealed class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void Cleanup(IDisposable? resource)
+    {
+        try { resource?.Dispose(); }
+        catch (Exception exception) { Log.Error($"Initialization cleanup failed: {exception.Message}"); }
     }
 
     private async void OnUnhandledException(object? sender, DispatcherUnhandledExceptionEventArgs eventArgs)

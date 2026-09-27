@@ -39,6 +39,7 @@
     <Grid RowDefinitions="Auto,Auto,*,Auto">
         <Border x:Name="ControllerPanel" Grid.Row="0" Background="{StaticResource AppSurfaceBrush}"
                 BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,0,0,1" Padding="18,10">
+            <StackPanel Spacing="8">
             <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
                 <Path Grid.Column="0" Width="40" Height="28" Stretch="Uniform" Margin="0,0,12,0"
                       VerticalAlignment="Center" Fill="{StaticResource AppTextPrimaryBrush}"
@@ -83,6 +84,29 @@
                           Data="M 10,1 L 10,11 M 5,5 C -3,10 1,21 10,21 C 19,21 23,10 15,5" />
                 </Button>
             </Grid>
+            <Border BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="0,8,0,0">
+                <StackPanel Spacing="5">
+                    <WrapPanel>
+                        <ToggleButton x:Name="XboxEmulationToggle" Content="Xbox 360 emulation"
+                                      IsChecked="{Binding IsXboxEmulationEnabled, Mode=TwoWay}"
+                                      IsEnabled="{Binding CanChangeXboxEmulation}" Margin="0,0,12,0" />
+                        <TextBlock Text="{Binding XboxStatus}" VerticalAlignment="Center" Margin="0,0,16,0" />
+                        <CheckBox x:Name="XboxAutoStartCheckBox" Content="Enable Xbox emulation on startup"
+                                  IsChecked="{Binding AutoStartXboxEmulation, Mode=TwoWay}"
+                                  ToolTip.Tip="Applies to the next app launch, independently of telemetry and profiles." />
+                    </WrapPanel>
+                    <StackPanel IsVisible="{Binding HasXboxError}" Spacing="5">
+                        <TextBlock Text="{Binding XboxError}" TextWrapping="Wrap" Foreground="{StaticResource AppWarningBrush}" />
+                        <WrapPanel>
+                            <Button Content="HidHide downloads" Command="{Binding OpenHidHideDownloadCommand}" Margin="0,0,8,0" />
+                            <Button Content="ViGEmBus downloads" Command="{Binding OpenViGEmDownloadCommand}" Margin="0,0,8,0" />
+                            <Button Content="Check again" Command="{Binding CheckXboxDependenciesCommand}"
+                                    IsEnabled="{Binding CanChangeXboxEmulation}" />
+                        </WrapPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+            </StackPanel>
         </Border>
         <Border Grid.Row="1" Background="{StaticResource AppSurfaceBrush}"
                 BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,0,0,1" Padding="14,10">

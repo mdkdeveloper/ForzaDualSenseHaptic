@@ -31,6 +31,7 @@ public sealed record ControllerSnapshot
 public interface IControllerService : IDisposable
 {
     ControllerSnapshot Snapshot { get; }
+    event Action<ControllerInputState>? InputReceived { add { } remove { } }
     Task DisconnectAsync(string deviceId, CancellationToken cancellationToken = default);
 }
 

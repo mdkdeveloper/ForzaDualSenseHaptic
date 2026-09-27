@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using ForzaHaptics.Controllers;
+using ForzaHaptics.Emulation;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Util;
 
@@ -35,6 +36,10 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private readonly IPlatformShellService _shell;
     private readonly IUiDispatcher _dispatcher;
     private readonly IControllerService? _controller;
+    private readonly IXboxEmulationService? _emulation;
+    private bool _emulationOperation;
+    private string? _xboxOperationError;
+    private bool _suppressEmulationChange;
     private bool _suppressProfileChange;
     private bool _disposed;
 
@@ -58,6 +63,21 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     private bool _autoStartListening;
+
+    [ObservableProperty]
+    private bool _autoStartXboxEmulation;
+
+    [ObservableProperty]
+    private bool _isXboxEmulationEnabled;
+
+    [ObservableProperty]
+    private string _xboxStatus = "Disabled";
+
+    [ObservableProperty]
+    private string? _xboxError;
+
+    public bool CanChangeXboxEmulation => _emulation is not null && !_emulationOperation && !_emulation.IsBusy && !IsDisconnecting;
+    public bool HasXboxError => !string.IsNullOrWhiteSpace(XboxError);
 
     [ObservableProperty]
     private string _engineStateText = "Stopped";
@@ -135,7 +155,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         IPlatformShellService shell,
         IUiDispatcher dispatcher,
         IEnumerable<(LogLevel Level, string Text)>? earlyLog = null,
-        IControllerService? controller = null)
+        IControllerService? controller = null,
+        IXboxEmulationService? emulation = null)
     {
         _profiles = profiles ?? throw new ArgumentNullException(nameof(profiles));
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
@@ -143,6 +164,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _controller = controller;
+        _emulation = emulation;
+        _autoStartXboxEmulation = _profiles.AutoStartXboxEmulation;
         _autoStartListening = _profiles.AutoStartListening;
 
         Settings = new SettingsViewModel(_profiles.Current) { IsReadOnly = _profiles.IsReadOnly };
@@ -171,15 +194,88 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     public async Task InitializeAsync()
     {
-        if (AutoStartListening)
+        if (_disposed) return;
+        if (_emulation is not null)
+        {
+            await RunEmulationAsync(async () =>
+            {
+                await _emulation.InitializeAsync();
+                if (!_disposed && AutoStartXboxEmulation)
+                    await _emulation.SetEnabledAsync(true);
+            });
+        }
+        if (!_disposed && AutoStartListening)
             await StartEngineAsync();
     }
 
     partial void OnAutoStartListeningChanged(bool value) => _profiles.AutoStartListening = value;
 
+    partial void OnAutoStartXboxEmulationChanged(bool value) => _profiles.AutoStartXboxEmulation = value;
+
+    partial void OnIsXboxEmulationEnabledChanged(bool value)
+    {
+        if (!_suppressEmulationChange && !_disposed && _emulation is not null)
+            _ = RunEmulationAsync(() => _emulation.SetEnabledAsync(value));
+    }
+
+    partial void OnXboxErrorChanged(string? value) => OnPropertyChanged(nameof(HasXboxError));
+
+    private async Task RunEmulationAsync(Func<Task> action)
+    {
+        if (_emulationOperation || _disposed)
+            return;
+        _emulationOperation = true;
+        _xboxOperationError = null;
+        OnPropertyChanged(nameof(CanChangeXboxEmulation));
+        try { await action(); }
+        catch (Exception exception)
+        {
+            _xboxOperationError = exception.Message;
+            Log.Error($"Xbox emulation: {exception.Message}");
+        }
+        finally
+        {
+            _emulationOperation = false;
+            RefreshXboxStatus();
+        }
+    }
+
+    private void RefreshXboxStatus()
+    {
+        if (_emulation is not null)
+        {
+            XboxStatus = _emulation.Status;
+            XboxError = _emulation.Error ?? _xboxOperationError;
+            if (!_emulationOperation)
+            {
+                _suppressEmulationChange = true;
+                try { IsXboxEmulationEnabled = _emulation.IsEnabled; }
+                finally { _suppressEmulationChange = false; }
+            }
+        }
+        OnPropertyChanged(nameof(CanChangeXboxEmulation));
+    }
+
+    [RelayCommand]
+    private Task CheckXboxDependenciesAsync() => _emulation is null
+        ? Task.CompletedTask : RunEmulationAsync(() => _emulation.CheckAgainAsync());
+
+    [RelayCommand]
+    private void OpenHidHideDownload() => OpenDriverUrl("https://github.com/nefarius/HidHide/releases");
+
+    [RelayCommand]
+    private void OpenViGEmDownload() => OpenDriverUrl("https://github.com/nefarius/ViGEmBus/releases");
+
+    private void OpenDriverUrl(string url)
+    {
+        try { _shell.OpenUrl(url); }
+        catch (Exception exception) { XboxError = _xboxOperationError = $"Could not open download page: {exception.Message}"; }
+    }
+
     public void RefreshStatus()
     {
         RefreshControllerStatus();
+        RefreshXboxStatus();
         IsEngineRunning = _engine.IsRunning;
         EngineStateText = IsBusy ? "Working…" : IsEngineRunning ? "Running" : "Stopped";
         StatusText = IsBusy ? "…" : _engine.BuildStatus();
@@ -226,6 +322,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         ControllerError = string.Empty;
         try
         {
+            if (_emulation is not null) await _emulation.SuspendAsync();
             await _engine.SuspendOutputAsync();
             try
             {
@@ -245,6 +342,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            _emulation?.Resume();
             IsDisconnecting = false;
             IsBusy = false;
             RefreshStatus();
@@ -308,7 +406,11 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         if (IsBusy)
             return;
         if (_engine.IsRunning)
-            await RunEngineAsync(() => _engine.StopAsync());
+            await RunEngineAsync(async () =>
+            {
+                await _engine.StopAsync();
+                _emulation?.SetHapticsActive(false);
+            });
         else
             await StartEngineAsync();
     }
@@ -484,7 +586,16 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private async Task StartEngineAsync()
     {
         bool started = false;
-        await RunEngineAsync(async () => started = await _engine.StartAsync(CurrentOptions()));
+        await RunEngineAsync(async () =>
+        {
+            _emulation?.SetHapticsActive(true);
+            try { started = await _engine.StartAsync(CurrentOptions()); }
+            finally
+            {
+                if (!_engine.IsRunning)
+                    _emulation?.SetHapticsActive(false);
+            }
+        });
         if (started)
         {
             RestartPending = false;
@@ -494,12 +605,12 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task RunEngineAsync(Func<Task> action)
     {
-        if (IsBusy)
+        if (_disposed || IsBusy)
             return;
         IsBusy = true;
         try
         {
-            await action();
+            if (!_disposed) await action();
         }
         catch (Exception exception)
         {
@@ -692,8 +803,17 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         Log.Message -= OnLog;
         _profiles.ReloadedFromDisk -= OnReloadedFromDisk;
         Settings.Changed -= OnSettingChanged;
-        _engine.Dispose();
-        _controller?.Dispose();
-        _profiles.Dispose();
+        // Every owner must be released even if a physical device vanished during cleanup.
+        Cleanup(() => _emulation?.SetHapticsActive(true));
+        Cleanup(_engine.Dispose);
+        Cleanup(() => _emulation?.Dispose());
+        Cleanup(() => _controller?.Dispose());
+        Cleanup(_profiles.Dispose);
+
+        static void Cleanup(Action action)
+        {
+            try { action(); }
+            catch (Exception exception) { Log.Error($"Shutdown cleanup failed: {exception.Message}"); }
+        }
     }
 }

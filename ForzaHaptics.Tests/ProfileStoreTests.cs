@@ -17,8 +17,30 @@ public sealed class ProfileStoreTests
         var store = ProfileStore.Open(folder.Path);
 
         Assert.True(store.AutoStartListening);
+        Assert.False(store.AutoStartXboxEmulation);
     }
 
+    [Fact]
+    public void XboxAutostartPersistsIndependentlyAcrossProfilesAndListeningChanges()
+    {
+        using var folder = new ProfileTestDirectory();
+        var store = ProfileStore.Open(folder.Path);
+        using var session = new ProfileSession(store, store.OpenProfile("Default"), "Default");
+        long revision = session.Revision;
+        session.AutoStartXboxEmulation = true;
+        session.AutoStartListening = false;
+        session.SwitchTo("profile_1");
+        Assert.True(session.AutoStartXboxEmulation);
+        session.SwitchTo("Default");
+        Assert.True(session.AutoStartXboxEmulation);
+        var reopened = ProfileStore.Open(folder.Path);
+        Assert.True(reopened.AutoStartXboxEmulation);
+        Assert.False(reopened.AutoStartListening);
+        reopened.AutoStartListening = true;
+        Assert.True(ProfileStore.Open(folder.Path).AutoStartXboxEmulation);
+        reopened.AutoStartXboxEmulation = false;
+        Assert.False(ProfileStore.Open(folder.Path).AutoStartXboxEmulation);
+    }
     [Fact]
     public void AutoStartAndActiveProfilePersistWithoutOverwritingEachOther()
     {

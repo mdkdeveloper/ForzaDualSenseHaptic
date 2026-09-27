@@ -29,6 +29,7 @@ public sealed class ControllerService : IControllerService
     private int _disposed;
     private int _generation;
     public ControllerSnapshot Snapshot => Volatile.Read(ref _snapshot);
+    public event Action<ControllerInputState>? InputReceived;
 
     public ControllerService(Func<string>? outputMode = null, Func<string?>? activeDeviceId = null)
         : this(new HidControllerBackend(), outputMode, activeDeviceId) { }
@@ -114,7 +115,9 @@ public sealed class ControllerService : IControllerService
                                 lock (_sync) connection = _connection;
                                 if (connection == null) break;
                                 var report = connection.Read();
-                                bool valid = report != null && DualSenseBatteryParser.TryParse(report, selected.Transport, out _, out _);
+                                ControllerInputState? input = null;
+                                bool valid = report != null && DualSenseInputParser.TryParse(report, selected.Transport,
+                                    selected.Id, Environment.TickCount64, out input);
                                 lock (_sync)
                                 {
                                     if (_generation != generation || _disconnecting != 0 || _disposed != 0) break;
@@ -122,16 +125,16 @@ public sealed class ControllerService : IControllerService
                                     {
                                         DualSenseBatteryParser.TryParse(report, selected.Transport, out int? percent, out bool charging);
                                         DualSenseTriggerFeedbackParser.TryParse(report, selected.Transport, out var feedback);
-                                        DualSensePhysicalInputParser.TryParse(report, selected.Transport, out byte left, out byte right);
-                                        lastValidReport = Environment.TickCount64;
+                                        lastValidReport = input!.Timestamp;
                                         Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = percent, IsCharging = charging,
-                                            TriggerFeedback = feedback, LeftTrigger = left, RightTrigger = right, LastInputTick = lastValidReport });
+                                            TriggerFeedback = feedback, LeftTrigger = input.LT, RightTrigger = input.RT, LastInputTick = lastValidReport });
                                     }
                                     else if (Environment.TickCount64 - lastValidReport > 5000)
                                         Volatile.Write(ref _snapshot, Snapshot with { BatteryPercent = null, IsCharging = false, TriggerFeedback = null });
                                     else if (Environment.TickCount64 - lastValidReport > 300)
                                         Volatile.Write(ref _snapshot, Snapshot with { TriggerFeedback = null });
                                 }
+                                if (valid) PublishInput(input!);
                             } while (!token.IsCancellationRequested && Volatile.Read(ref _disconnecting) == 0 && Environment.TickCount64 < deadline);
                             continue;
                         }
@@ -168,6 +171,17 @@ public sealed class ControllerService : IControllerService
             }
         }
         CloseConnection();
+    }
+
+    private void PublishInput(ControllerInputState input)
+    {
+        var handlers = InputReceived;
+        if (handlers == null) return;
+        foreach (Action<ControllerInputState> handler in handlers.GetInvocationList())
+        {
+            try { handler(input); }
+            catch (Exception exception) { Log.Warn($"Controller input subscriber: {exception.Message}"); }
+        }
     }
 
     public async Task DisconnectAsync(string deviceId, CancellationToken cancellationToken = default)

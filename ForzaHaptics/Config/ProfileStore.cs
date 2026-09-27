@@ -108,6 +108,15 @@ public sealed class ProfileStore
         set => UpdateSettings(settings => settings.AutoStartListening = value, "auto-start listening preference");
     }
 
+    public bool AutoStartXboxEmulation
+    {
+        get
+        {
+            lock (_settingsGate) return LoadSettings().AutoStartXboxEmulation;
+        }
+        set => UpdateSettings(settings => settings.AutoStartXboxEmulation = value, "Xbox emulation auto-start preference");
+    }
+
     public void SaveActive(string name) => UpdateSettings(settings => settings.ActiveProfile = name, "active profile");
 
     private void UpdateSettings(Action<Settings> update, string description)
@@ -225,5 +234,6 @@ public sealed class ProfileStore
     {
         public string? ActiveProfile { get; set; }
         public bool AutoStartListening { get; set; } = true;
+        public bool AutoStartXboxEmulation { get; set; }
     }
 }
