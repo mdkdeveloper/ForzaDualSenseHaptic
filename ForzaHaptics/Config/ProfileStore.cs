@@ -9,6 +9,7 @@ public sealed class ProfileStore
     public const string DefaultName = "Default";
     public const string InitialProfileName = "profile_1";
     private readonly string _settingsPath;
+    private readonly object _settingsGate = new();
 
     public string Directory { get; }
 
@@ -98,26 +99,47 @@ public sealed class ProfileStore
         return name;
     }
 
-    public void SaveActive(string name)
+    public bool AutoStartListening
     {
-        try
+        get
         {
-            File.WriteAllText(_settingsPath, JsonSerializer.Serialize(new Settings { ActiveProfile = name }, ConfigManager.JsonOptions));
+            lock (_settingsGate) return LoadSettings().AutoStartListening;
         }
-        catch (Exception ex) { Log.Warn($"Could not remember the active profile: {ex.Message}"); }
+        set => UpdateSettings(settings => settings.AutoStartListening = value, "auto-start listening preference");
+    }
+
+    public void SaveActive(string name) => UpdateSettings(settings => settings.ActiveProfile = name, "active profile");
+
+    private void UpdateSettings(Action<Settings> update, string description)
+    {
+        lock (_settingsGate)
+        {
+            try
+            {
+                var settings = LoadSettings();
+                update(settings);
+                File.WriteAllText(_settingsPath, JsonSerializer.Serialize(settings, ConfigManager.JsonOptions));
+            }
+            catch (Exception ex) { Log.Warn($"Could not remember the {description}: {ex.Message}"); }
+        }
     }
 
     private string? LoadActive()
     {
+        lock (_settingsGate) return LoadSettings().ActiveProfile;
+    }
+
+    private Settings LoadSettings()
+    {
         try
         {
-            if (!File.Exists(_settingsPath)) return null;
-            return JsonSerializer.Deserialize<Settings>(File.ReadAllText(_settingsPath), ConfigManager.JsonOptions)?.ActiveProfile;
+            if (!File.Exists(_settingsPath)) return new Settings();
+            return JsonSerializer.Deserialize<Settings>(File.ReadAllText(_settingsPath), ConfigManager.JsonOptions) ?? new Settings();
         }
         catch (Exception ex)
         {
-            Log.Warn($"Could not read the active profile selection: {ex.Message}");
-            return null;
+            Log.Warn($"Could not read the application settings: {ex.Message}");
+            return new Settings();
         }
     }
 
@@ -202,5 +224,6 @@ public sealed class ProfileStore
     private sealed class Settings
     {
         public string? ActiveProfile { get; set; }
+        public bool AutoStartListening { get; set; } = true;
     }
 }

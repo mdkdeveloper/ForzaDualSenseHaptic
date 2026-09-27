@@ -5,6 +5,7 @@ public interface IProfileSession : IDisposable
 {
     IReadOnlyList<string> Profiles { get; }
     string ActiveProfile { get; }
+    bool AutoStartListening { get; set; }
     bool IsReadOnly => ProfileStore.IsDefault(ActiveProfile);
     string ProfileDirectory { get; }
     AppConfig Current { get; }
@@ -42,6 +43,11 @@ public sealed class ProfileSession : IProfileSession
 
     public IReadOnlyList<string> Profiles => _profiles;
     public string ActiveProfile { get; private set; }
+    public bool AutoStartListening
+    {
+        get => _store.AutoStartListening;
+        set => _store.AutoStartListening = value;
+    }
     public string ProfileDirectory => _store.Directory;
     public AppConfig Current => _config.Current;
     public long Revision => _config.Revision;

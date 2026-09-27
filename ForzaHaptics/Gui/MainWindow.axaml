@@ -127,11 +127,20 @@
                 BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="14,10">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
                 <WrapPanel Grid.Row="0" Orientation="Horizontal">
-                        <Button x:Name="StartStopButton" Content="{Binding StartStopText}"
-                                Command="{Binding StartStopCommand}" IsEnabled="{Binding ControlsEnabled}"
-                                MinWidth="88" Margin="0,0,6,0"
-                                Classes.primaryAction="{Binding IsEngineStopped}"
-                                Classes.destructiveAction="{Binding IsEngineRunning}" />
+                        <Border BorderBrush="{StaticResource AppControlBorderBrush}" BorderThickness="1"
+                                CornerRadius="5" Margin="0,0,6,0" VerticalAlignment="Center">
+                            <Grid ColumnDefinitions="Auto,Auto">
+                                <Button x:Name="StartStopButton" Content="{Binding StartStopText}"
+                                        Command="{Binding StartStopCommand}" IsEnabled="{Binding ControlsEnabled}"
+                                        MinWidth="88" CornerRadius="4,0,0,4"
+                                        Classes.primaryAction="{Binding IsEngineStopped}"
+                                        Classes.destructiveAction="{Binding IsEngineRunning}" />
+                                <CheckBox x:Name="AutoStartCheckBox" Grid.Column="1" Content="Auto-start"
+                                          IsChecked="{Binding AutoStartListening, Mode=TwoWay}"
+                                          Margin="10,0" VerticalAlignment="Center"
+                                          ToolTip.Tip="Start listening on the UDP port when the app opens, even without a controller. Changes apply to the next app launch." />
+                            </Grid>
+                        </Border>
                         <ToggleButton Content="Simulation" IsChecked="{Binding IsSimulationEnabled, Mode=TwoWay}"
                                       Command="{Binding ApplyModesCommand}" IsEnabled="{Binding ControlsEnabled}"
                                       Margin="0,0,6,0"

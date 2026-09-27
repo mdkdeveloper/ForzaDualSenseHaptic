@@ -9,6 +9,7 @@ namespace ForzaHaptics.Output;
 public interface IHapticOutput : IDisposable
 {
     string Description { get; }
+    bool IsAlive { get; }
     void Start();
     /// <summary>Short status-line state (errors, counters), or empty.</summary>
     string Health { get; }
@@ -26,9 +27,12 @@ public sealed class UsbAudioOutput : IHapticOutput
 
     private readonly WasapiOut _out;
     private readonly SourceWaveProvider _provider;
+    private readonly MMDevice _device;
+    private volatile bool _alive;
 
     public string Description { get; }
     public string Health => _provider.Error ?? "";
+    public bool IsAlive => _alive;
 
     public UsbAudioOutput(MMDevice device, int latencyMs, int channelLeft, int channelRight, Func<int, IHapticSource> sourceFactory)
     {
@@ -53,15 +57,21 @@ public sealed class UsbAudioOutput : IHapticOutput
         var source = sourceFactory(mix.SampleRate);
         _provider = new SourceWaveProvider(mix, sampleFormat, source, channelLeft, channelRight);
 
+        Description = $"USB audio \"{device.FriendlyName}\": {mix.SampleRate} Hz, {mix.Channels} ch, " +
+                      $"{mix.BitsPerSample}-bit ({sampleFormat}); haptics → channels {channelLeft + 1} (L) and {channelRight + 1} (R)";
+
         _out = new WasapiOut(device, AudioClientShareMode.Shared, true, latencyMs);
         _out.PlaybackStopped += (_, e) =>
         {
+            _alive = false;
             if (e.Exception != null) Log.Error($"USB audio stopped: {e.Exception.Message}");
         };
-        _out.Init(_provider);
-
-        Description = $"USB audio \"{device.FriendlyName}\": {mix.SampleRate} Hz, {mix.Channels} ch, " +
-                      $"{mix.BitsPerSample}-bit ({sampleFormat}); haptics → channels {channelLeft + 1} (L) and {channelRight + 1} (R)";
+        try { _out.Init(_provider); }
+        catch
+        {
+            _out.Dispose();
+            throw;
+        }
 
         try
         {
@@ -76,14 +86,22 @@ public sealed class UsbAudioOutput : IHapticOutput
         {
             // non-critical
         }
+        // Keep the endpoint alive for WASAPI; ownership transfers only after construction succeeds.
+        _device = device;
     }
 
-    public void Start() => _out.Play();
+    public void Start()
+    {
+        _alive = true;
+        _out.Play();
+    }
 
     public void Dispose()
     {
+        _alive = false;
         try { _out.Stop(); } catch { /* ignore */ }
-        _out.Dispose();
+        try { _out.Dispose(); }
+        finally { _device.Dispose(); }
     }
 
     /// <summary>Finds an active DualSense audio output (DualSense / DualSense Edge / "Wireless Controller").</summary>
@@ -93,6 +111,7 @@ public sealed class UsbAudioOutput : IHapticOutput
         foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
             if (IsDualSenseName(SafeName(device))) return device;
+            device.Dispose();
         }
         return null;
     }

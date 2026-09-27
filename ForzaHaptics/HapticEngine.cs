@@ -49,6 +49,16 @@ public sealed class HapticEngine : IDisposable
     private TriggerRuntime? _triggerRuntime;
     private int _port;
     private double _simStart;
+    private Timer? _outputMonitor;
+    private CancellationTokenSource? _outputCts;
+    private bool _outputSuspended;
+    private bool _disposed;
+    private readonly HashSet<string> _outputErrors = new(StringComparer.Ordinal);
+    private readonly Func<AppConfig, EngineOptions, Func<int, IHapticSource>, (IHapticOutput? Output, string? DeviceId)>? _createOutput;
+
+    internal HapticEngine(Func<AppConfig> config, Func<ControllerSnapshot> controllerInput,
+        Func<AppConfig, EngineOptions, Func<int, IHapticSource>, (IHapticOutput? Output, string? DeviceId)> createOutput)
+        : this(config, null, controllerInput) => _createOutput = createOutput;
 
     public HapticEngine(Func<AppConfig> config, Func<long>? configRevision = null, Func<ControllerSnapshot>? controllerInput = null)
     {
@@ -60,20 +70,22 @@ public sealed class HapticEngine : IDisposable
     public bool IsRunning { get; private set; }
     public string? ActiveControllerDeviceId { get; private set; }
     public EngineOptions Options => _options;
-    public string OutputDescription => _output?.Description ?? "";
+    public string OutputDescription => _output?.Description ?? (IsRunning ? "Waiting for controller" : "");
     public string TriggersDescription => _triggers?.Description ?? "";
     public float PeakL => _synth?.Meters.PeakL ?? 0f;
     public float PeakR => _synth?.Meters.PeakR ?? 0f;
     public string ActiveEffects => _synth?.Meters.Active ?? "";
-    public TriggerPair Triggers => _triggers != null && _bus != null ? _bus.Triggers : TriggerPair.Off;
+    public TriggerPair Triggers => _triggers != null ? _bus?.Triggers ?? TriggerPair.Off : TriggerPair.Off;
     public bool HasTriggers => _triggers != null;
+    internal int? ListeningPort => _receiver?.Port;
 
-    /// <summary>Starts the engine. Returns false when no output is found or the port is busy (the reason is logged).</summary>
+    /// <summary>Starts telemetry independently of controller availability. Returns false if the port is busy.</summary>
     public bool Start(EngineOptions options)
     {
         lock (_sync)
         {
-            if (IsRunning) StopCore();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            StopCore();
             _options = options;
             var cfg = _config();
 
@@ -83,27 +95,10 @@ public sealed class HapticEngine : IDisposable
             _synth = null;
             _test = null;
 
-            IHapticSource Factory(int sampleRate)
-            {
-                if (options.Test) return _test = new TestPattern(sampleRate);
-                return _synth = new HapticSynth(bus, _config, sampleRate);
-            }
-
-            string mode = (options.Output ?? cfg.Output).Trim().ToLowerInvariant();
-            _output = OutputFactory.Create(mode, cfg, Factory, out string? activeDeviceId, options.ControllerDeviceId);
-            if (_output == null) return false;
-            ActiveControllerDeviceId = activeDeviceId;
-            Log.Ok("Output: " + _output.Description);
-
-            _triggers = options.Test ? null : TriggerOutput.Create(cfg, bus, _output is BluetoothHidOutput, activeDeviceId);
-            if (_triggers != null) Log.Ok("Triggers: " + _triggers.Description);
-            if (_triggers != null)
-            {
-                ActiveControllerDeviceId = _triggers.DeviceId;
-                if (_controllerInput == null)
-                    _ownedController ??= new ControllerService(() => _config().Output, () => ActiveControllerDeviceId);
-                _triggerRuntime = new TriggerRuntime(bus, _config, _configRevision);
-            }
+            _outputSuspended = false;
+            _outputErrors.Clear();
+            if (_controllerInput == null && _createOutput == null)
+                _ownedController ??= new ControllerService(() => _options.Output ?? _config().Output, () => ActiveControllerDeviceId);
 
             _cts = new CancellationTokenSource();
             _port = options.Port ?? cfg.Port;
@@ -163,11 +158,17 @@ public sealed class HapticEngine : IDisposable
                     }
                 }
 
-                _output.Start();
-                if (_triggerRuntime != null)
-                    _triggerLoop = StartTriggerLoop(_triggerRuntime, bus, _cts.Token, options.TriggerTest);
-                _triggers?.Start();
                 IsRunning = true;
+                RefreshOutputCore();
+                var sessionToken = _cts.Token;
+                _outputMonitor = new Timer(_ =>
+                {
+                    lock (_sync)
+                    {
+                        if (!sessionToken.IsCancellationRequested && IsRunning && !_outputSuspended)
+                            RefreshOutputCore();
+                    }
+                }, null, 1000, 1000);
                 return true;
             }
             catch
@@ -176,6 +177,137 @@ public sealed class HapticEngine : IDisposable
                 throw;
             }
         }
+    }
+
+    /// <summary>Release output while preserving telemetry, forwarding, and recording.</summary>
+    public void SuspendOutput()
+    {
+        lock (_sync)
+        {
+            _outputSuspended = true;
+            StopOutputCore();
+        }
+    }
+
+    public void ResumeOutput()
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _outputSuspended = false;
+            if (IsRunning) RefreshOutputCore();
+        }
+    }
+
+    internal void RefreshOutput()
+    {
+        lock (_sync)
+            if (IsRunning && !_outputSuspended) RefreshOutputCore();
+    }
+
+    private void RefreshOutputCore()
+    {
+        try
+        {
+            var snapshot = _controllerInput?.Invoke() ?? _ownedController?.Snapshot ?? ControllerSnapshot.Disconnected;
+            if (_output != null && (!snapshot.IsConnected || snapshot.DeviceId != ActiveControllerDeviceId || !_output.IsAlive))
+            {
+                StopOutputCore();
+                Log.Info("Controller output detached; telemetry remains active.");
+            }
+            if (_output != null)
+            {
+                RefreshTriggersCore();
+                return;
+            }
+            if (!snapshot.IsConnected || snapshot.DeviceId == null || _bus == null)
+                return;
+            var cfg = _config();
+            string mode = (_options.Output ?? cfg.Output).Trim().ToLowerInvariant();
+            if ((mode == "usb" && snapshot.Transport != ControllerTransport.Usb) ||
+                (mode == "bt" && snapshot.Transport != ControllerTransport.Bluetooth))
+                return;
+            IHapticSource Factory(int sampleRate) => _options.Test
+                ? _test = new TestPattern(sampleRate)
+                : _synth = new HapticSynth(_bus, _config, sampleRate);
+            string? activeDeviceId;
+            if (_createOutput != null)
+                (_output, activeDeviceId) = _createOutput(cfg, _options with { ControllerDeviceId = snapshot.DeviceId }, Factory);
+            else
+                _output = OutputFactory.Create(mode, cfg, Factory, out activeDeviceId, snapshot.DeviceId, quiet: true, reportIssue: ReportOutputIssue);
+            if (_output == null)
+            {
+                _synth = null;
+                _test = null;
+                return;
+            }
+            ActiveControllerDeviceId = activeDeviceId;
+            _bus.Kicks.Clear();
+            _bus.TriggerFrames.Clear();
+            _bus.PublishTriggers(TriggerPair.Off, _bus.ResetGeneration);
+            _output.Start();
+            RefreshTriggersCore();
+            _outputErrors.Clear();
+            Log.Ok("Output: " + _output.Description);
+        }
+        catch (Exception exception)
+        {
+            StopOutputCore();
+            ReportOutputIssue(exception.Message);
+        }
+    }
+
+    private void ReportOutputIssue(string message)
+    {
+        if (_outputErrors.Add(message))
+            Log.Warn("Waiting for controller output: " + message);
+    }
+
+    private void StopOutputCore()
+    {
+        ActiveControllerDeviceId = null;
+        StopTriggersCore();
+        try { _output?.Dispose(); } catch (Exception exception) { Log.Warn("Output cleanup: " + exception.Message); }
+        _output = null;
+        _synth = null;
+        _test = null;
+    }
+
+    private void RefreshTriggersCore()
+    {
+        if (_createOutput != null || _options.Test || !_config().Triggers.Enabled || _bus == null || _output == null)
+            return;
+        if (_triggers?.IsAlive == true) return;
+        StopTriggersCore();
+        _triggers = TriggerOutput.Create(_config(), _bus, _output is BluetoothHidOutput, ActiveControllerDeviceId,
+            message =>
+            {
+                if (_lastTriggerError != message) Log.Warn(message);
+                _lastTriggerError = message;
+            });
+        if (_triggers == null) return;
+        _outputCts = new CancellationTokenSource();
+        _bus.TriggerFrames.Clear();
+        _bus.PublishTriggers(TriggerPair.Off, _bus.ResetGeneration);
+        _triggerRuntime = new TriggerRuntime(_bus, _config, _configRevision);
+        _triggerLoop = StartTriggerLoop(_triggerRuntime, _bus, _outputCts.Token, _options.TriggerTest);
+        _triggers.Start();
+        _lastTriggerError = null;
+        Log.Ok("Triggers: " + _triggers.Description);
+    }
+
+    private string? _lastTriggerError;
+
+    private void StopTriggersCore()
+    {
+        _outputCts?.Cancel();
+        _triggerLoop?.Join(1000);
+        _triggerLoop = null;
+        _triggerRuntime = null;
+        try { _triggers?.Dispose(); } catch (Exception exception) { Log.Warn("Trigger cleanup: " + exception.Message); }
+        _triggers = null;
+        _outputCts?.Dispose();
+        _outputCts = null;
     }
 
     public void Stop()
@@ -187,19 +319,14 @@ public sealed class HapticEngine : IDisposable
     {
         bool wasRunning = IsRunning;
         IsRunning = false;
-        ActiveControllerDeviceId = null;
+        _outputMonitor?.Dispose();
+        _outputMonitor = null;
         _cts?.Cancel();
         _receiver?.Dispose();
         _receiver = null;
         _feeder?.Join(1000);
         _feeder = null;
-        _triggerLoop?.Join(1000);
-        _triggerLoop = null;
-        _triggerRuntime = null;
-        _triggers?.Dispose(); // releases the triggers
-        _triggers = null;
-        _output?.Dispose();
-        _output = null;
+        StopOutputCore();
         if (_recorder != null)
         {
             _recorder.Dispose();
@@ -216,23 +343,29 @@ public sealed class HapticEngine : IDisposable
     /// <summary>Status line matching the console output.</summary>
     public string BuildStatus()
     {
-        if (!IsRunning || _bus == null || _output == null) return "Stopped";
+        var bus = _bus;
+        var output = _output;
+        var synth = _synth;
+        var triggers = _triggers;
+        var test = _test;
+        var runtime = _triggerRuntime;
+        if (!IsRunning || bus == null) return "Stopped";
 
-        string health = string.Join(" | ", new[] { _output.Health, _triggers?.Health ?? "" }.Where(h => h.Length > 0));
+        string health = string.Join(" | ", new[] { output?.Health ?? "Waiting for controller", triggers?.Health ?? "" }.Where(h => h.Length > 0));
         string tail = health.Length > 0 ? " | " + health : "";
-        if (_triggers != null)
+        if (triggers != null)
             tail += " | " + (_controllerInput?.Invoke() ?? _ownedController?.Snapshot ?? ControllerSnapshot.Disconnected).TriggerFeedbackText;
 
-        if (_test != null) return $"TEST: {_test.Step}{tail}";
+        if (test != null) return $"TEST: {test.Step}{tail}";
         if (_options.TriggerTest)
-            return $"GEAR-ONLY TEST {(Clock.Now - _simStart < 12 ? "running" : "complete; restart to repeat")} | command {_bus.Triggers} | {_triggerRuntime?.Status}{tail}";
+            return $"GEAR-ONLY TEST {(Clock.Now - _simStart < 12 ? "running" : "complete; restart to repeat")} | command {bus.Triggers} | {runtime?.Status}{tail}";
 
-        string meters = _synth != null ? $"signal peaks L {_synth.Meters.PeakL:0.00} R {_synth.Meters.PeakR:0.00}" : "";
-        string line = FormatTelemetryStatus(_bus.Status, Clock.Now, meters, _synth?.Meters.Active ?? "",
-            _triggers != null ? _bus.Triggers.ToString() : "", _port, _options.ReplayPath != null);
+        string meters = synth != null ? $"signal peaks L {synth.Meters.PeakL:0.00} R {synth.Meters.PeakR:0.00}" : "";
+        string line = FormatTelemetryStatus(bus.Status, Clock.Now, meters, synth?.Meters.Active ?? "",
+            triggers != null ? bus.Triggers.ToString() : "", _port, _options.ReplayPath != null);
 
         if (_options.Simulate) line = $"[{DrivingSimulator.DescribePhase(Clock.Now - _simStart)}] " + line;
-        return line + (_triggerRuntime != null ? " | " + _triggerRuntime.Status : "") + tail;
+        return line + (runtime != null ? " | " + runtime.Status : "") + tail;
     }
 
     internal static string FormatTelemetryStatus(TelemetryStatus status, double now, string meters,
@@ -318,7 +451,7 @@ public sealed class HapticEngine : IDisposable
 
     private Thread StartTriggerLoop(TriggerRuntime runtime, HapticBus bus, CancellationToken token, bool manualTest)
     {
-        double start = Clock.Now;
+        double start = _simStart;
         var thread = new Thread(() =>
         {
             double next = Clock.Now;
@@ -353,7 +486,12 @@ public sealed class HapticEngine : IDisposable
 
     public void Dispose()
     {
-        Stop();
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            StopCore();
+        }
         _ownedController?.Dispose();
         _ownedController = null;
     }

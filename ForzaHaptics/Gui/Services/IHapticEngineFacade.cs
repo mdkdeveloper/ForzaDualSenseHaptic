@@ -15,6 +15,8 @@ public interface IHapticEngineFacade : IDisposable
 
     Task<bool> StartAsync(EngineOptions options, CancellationToken cancellationToken = default);
     Task StopAsync(CancellationToken cancellationToken = default);
+    Task SuspendOutputAsync(CancellationToken cancellationToken = default);
+    Task ResumeOutputAsync(CancellationToken cancellationToken = default);
     string BuildStatus();
 }
 
@@ -51,6 +53,12 @@ public sealed class HapticEngineFacade : IHapticEngineFacade
 
     public Task StopAsync(CancellationToken cancellationToken = default) =>
         Task.Run(_engine.Stop, cancellationToken);
+
+    public Task SuspendOutputAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(_engine.SuspendOutput, cancellationToken);
+
+    public Task ResumeOutputAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(_engine.ResumeOutput, cancellationToken);
 
     public string BuildStatus() => _engine.BuildStatus();
 

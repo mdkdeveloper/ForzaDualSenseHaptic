@@ -1,3 +1,8 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.VisualTree;
 using ForzaHaptics.Controllers;
 using ForzaHaptics.Gui.Services;
 using ForzaHaptics.Gui.ViewModels;
@@ -253,7 +258,7 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
-    public async Task DisconnectStopsEngineBeforeTargetingTheDisplayedController()
+    public async Task DisconnectSuspendsOnlyOutputBeforeTargetingTheDisplayedController()
     {
         var operations = new List<string>();
         var engine = new FakeEngineFacade { Operations = operations };
@@ -264,8 +269,9 @@ public sealed class MainWindowViewModelTests
 
         await viewModel.DisconnectControllerCommand.ExecuteAsync(null);
 
-        Assert.Equal(new[] { "stop", "disconnect:controller-1" }, operations);
-        Assert.True(viewModel.IsEngineStopped);
+        Assert.Equal(new[] { "suspend", "disconnect:controller-1", "resume" }, operations);
+        Assert.True(viewModel.IsEngineRunning);
+        Assert.Equal(0, engine.StopCount);
         Assert.False(viewModel.IsDisconnecting);
         Assert.Equal(1, engine.StartCount);
         Assert.Equal(1, controller.DisconnectCount);
@@ -313,9 +319,16 @@ public sealed class MainWindowViewModelTests
             DisconnectException = new IOException("Radio unavailable"),
         };
         var dialogs = new FakeDialogService();
-        using var viewModel = CreateViewModel(dialogs: dialogs, controller: controller);
+        var operations = new List<string>();
+        var engine = new FakeEngineFacade { Operations = operations };
+        using var viewModel = CreateViewModel(engine: engine, dialogs: dialogs, controller: controller);
+        await viewModel.InitializeAsync();
 
         await viewModel.DisconnectControllerCommand.ExecuteAsync(null);
+
+        Assert.Equal(new[] { "suspend", "resume" }, operations);
+        Assert.True(viewModel.IsEngineRunning);
+        Assert.Equal(0, engine.StopCount);
 
         Assert.True(viewModel.IsControllerConnected);
         Assert.Equal(40, viewModel.BatteryPercent);
@@ -348,12 +361,21 @@ public sealed class MainWindowViewModelTests
             ("bluetooth-65", Connected(ControllerTransport.Bluetooth, 65)),
             ("usb-charging-20", Connected(ControllerTransport.Usb, 20) with { IsCharging = true }),
             ("disconnected", ControllerSnapshot.Disconnected),
+            ("listening-no-controller", ControllerSnapshot.Disconnected),
         };
         foreach (var (name, state) in states)
         foreach (int width in new[] { 760, 1120 })
         foreach (double scale in new[] { 1d, 1.5d, 2d })
         {
-            using var viewModel = CreateViewModel(controller: new FakeControllerService { Snapshot = state });
+            var engine = new FakeEngineFacade();
+            var profiles = new FakeProfileSession();
+            if (name == "listening-no-controller")
+            {
+                engine.StartAsync(new EngineOptions()).GetAwaiter().GetResult();
+                profiles.AutoStartListening = false;
+                engine.OutputDescription = string.Empty;
+            }
+            using var viewModel = CreateViewModel(profiles, engine, controller: new FakeControllerService { Snapshot = state });
             var window = new ForzaHaptics.Gui.MainWindow { Width = width, Height = 820, DataContext = viewModel };
             window.Show();
             try
@@ -373,6 +395,79 @@ public sealed class MainWindowViewModelTests
                 window.Close();
             }
         }
+    }
+    [Fact]
+    public async Task DisabledAutoStartLeavesSessionStoppedAndManualStartStillWorks()
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = false };
+        var engine = new FakeEngineFacade();
+        using var viewModel = CreateViewModel(profiles, engine);
+        Assert.False(viewModel.AutoStartListening);
+        await viewModel.InitializeAsync();
+        Assert.Equal(0, engine.StartCount);
+        Assert.True(viewModel.IsEngineStopped);
+        await viewModel.StartStopCommand.ExecuteAsync(null);
+        Assert.True(viewModel.IsEngineRunning);
+        Assert.Equal(1, engine.StartCount);
+        Assert.False(profiles.AutoStartListening);
+    }
+
+    [Fact]
+    public async Task AutoStartChangesPersistWithoutChangingCurrentSessionOrProfile()
+    {
+        var profiles = new FakeProfileSession();
+        profiles.SwitchTo("Default");
+        var engine = new FakeEngineFacade();
+        using var viewModel = CreateViewModel(profiles, engine);
+        Assert.True(viewModel.AutoStartListening);
+        await viewModel.InitializeAsync();
+        viewModel.AutoStartListening = false;
+        Assert.False(profiles.AutoStartListening);
+        Assert.True(viewModel.IsEngineRunning);
+        Assert.Equal(0, engine.StopCount);
+        Assert.False(viewModel.IsDirty);
+        viewModel.SelectedProfile = "profile_1";
+        Assert.False(viewModel.AutoStartListening);
+        await viewModel.StartStopCommand.ExecuteAsync(null);
+        viewModel.AutoStartListening = true;
+        Assert.True(profiles.AutoStartListening);
+        Assert.True(viewModel.IsEngineStopped);
+        Assert.Equal(1, engine.StartCount);
+        Assert.False(viewModel.IsDirty);
+    }
+
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public void AutoStartCheckboxSupportsPointerAndKeyboardWithoutExecutingStartStop()
+    {
+        var profiles = new FakeProfileSession();
+        profiles.SwitchTo("Default");
+        var engine = new FakeEngineFacade();
+        using var viewModel = CreateViewModel(profiles, engine);
+        var window = new ForzaHaptics.Gui.MainWindow { DataContext = viewModel, Width = 760, Height = 560 };
+        window.Show();
+        try
+        {
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            var checkbox = Assert.Single(window.GetVisualDescendants().OfType<CheckBox>(), c => c.Name == "AutoStartCheckBox");
+            var button = Assert.Single(window.GetVisualDescendants().OfType<Button>(), c => c.Name == "StartStopButton");
+            Assert.True(checkbox.IsChecked);
+            Assert.True(checkbox.IsEnabled);
+            Assert.DoesNotContain(button, checkbox.GetVisualAncestors());
+            var point = checkbox.TranslatePoint(new Avalonia.Point(10, checkbox.Bounds.Height / 2), window)!.Value;
+            window.MouseDown(point, MouseButton.Left);
+            window.MouseUp(point, MouseButton.Left);
+            Assert.False(viewModel.AutoStartListening);
+            Assert.False(profiles.AutoStartListening);
+            checkbox.Focus();
+            window.KeyPressQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            window.KeyReleaseQwerty(PhysicalKey.Space, RawInputModifiers.None);
+            Assert.True(viewModel.AutoStartListening);
+            Assert.True(profiles.AutoStartListening);
+            Assert.Equal(0, engine.StartCount);
+            Assert.Equal(0, engine.StopCount);
+            Assert.False(viewModel.IsDirty);
+        }
+        finally { window.Close(); }
     }
     private static ControllerSnapshot Connected(ControllerTransport transport, int? battery) => new()
     {
@@ -407,6 +502,7 @@ public sealed class MainWindowViewModelTests
         public IReadOnlyList<string> Profiles { get; private set; } = new[] { "Default", "profile_1" };
         public string ActiveProfile { get; private set; } = "profile_1";
         public bool IsReadOnly => ActiveProfile == "Default";
+        public bool AutoStartListening { get; set; } = true;
         public string ProfileDirectory => "C:\\Profiles";
         public AppConfig Current { get; private set; } = new();
         public int SaveCount { get; private set; }
@@ -444,12 +540,12 @@ public sealed class MainWindowViewModelTests
     private sealed class FakeEngineFacade : IHapticEngineFacade
     {
         public bool IsRunning { get; private set; }
-        public string OutputDescription => "Fake output";
+        public string OutputDescription { get; set; } = "Fake output";
         public string TriggersDescription => string.Empty;
         public bool HasTriggers => false;
         public string TriggerState => string.Empty;
-        public float PeakLeft => 0.25f;
-        public float PeakRight => 0.5f;
+        public float PeakLeft => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.25f;
+        public float PeakRight => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.5f;
         public string ActiveEffects => string.Empty;
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
@@ -469,6 +565,18 @@ public sealed class MainWindowViewModelTests
             Operations?.Add("stop");
             StopCount++;
             IsRunning = false;
+            return Task.CompletedTask;
+        }
+
+        public Task SuspendOutputAsync(CancellationToken cancellationToken = default)
+        {
+            Operations?.Add("suspend");
+            return Task.CompletedTask;
+        }
+
+        public Task ResumeOutputAsync(CancellationToken cancellationToken = default)
+        {
+            Operations?.Add("resume");
             return Task.CompletedTask;
         }
 

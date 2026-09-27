@@ -4,6 +4,81 @@ namespace ForzaHaptics.Tests;
 
 public sealed class ProfileStoreTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("{}")]
+    [InlineData("{\"ActiveProfile\":\"Default\"}")]
+    public void AutoStartDefaultsToTrueForNewAndLegacySettings(string? settings)
+    {
+        using var folder = new ProfileTestDirectory();
+        if (settings != null)
+            File.WriteAllText(Path.Combine(folder.Path, "ForzaHaptics.settings.json"), settings);
+
+        var store = ProfileStore.Open(folder.Path);
+
+        Assert.True(store.AutoStartListening);
+    }
+
+    [Fact]
+    public void AutoStartAndActiveProfilePersistWithoutOverwritingEachOther()
+    {
+        using var folder = new ProfileTestDirectory();
+        var store = ProfileStore.Open(folder.Path);
+        store.SaveActive("Default");
+        store.AutoStartListening = false;
+
+        var reopened = ProfileStore.Open(folder.Path);
+        Assert.False(reopened.AutoStartListening);
+        Assert.Equal("Default", reopened.ResolveActive());
+        reopened.SaveActive("profile_1");
+
+        reopened = ProfileStore.Open(folder.Path);
+        Assert.False(reopened.AutoStartListening);
+        Assert.Equal("profile_1", reopened.ResolveActive());
+        reopened.AutoStartListening = true;
+        Assert.True(ProfileStore.Open(folder.Path).AutoStartListening);
+        Assert.Equal("profile_1", ProfileStore.Open(folder.Path).ResolveActive());
+    }
+
+    [Fact]
+    public void SessionAutoStartIsIndependentOfReadOnlyProfileAndConfigRevision()
+    {
+        using var folder = new ProfileTestDirectory();
+        var store = ProfileStore.Open(folder.Path);
+        using var session = new ProfileSession(store, store.OpenProfile("Default"), "Default");
+        long revision = session.Revision;
+
+        session.AutoStartListening = false;
+
+        Assert.True(session.IsReadOnly);
+        Assert.Equal(revision, session.Revision);
+        Assert.False(ProfileStore.Open(folder.Path).AutoStartListening);
+        session.SwitchTo("profile_1");
+        Assert.False(session.AutoStartListening);
+        session.SwitchTo("Default");
+        Assert.False(session.AutoStartListening);
+    }
+
+    [Fact]
+    public void UnwritableSettingsLogsAutoStartSaveFailure()
+    {
+        using var folder = new ProfileTestDirectory();
+        var store = ProfileStore.Open(folder.Path);
+        Directory.CreateDirectory(Path.Combine(folder.Path, "ForzaHaptics.settings.json"));
+        var messages = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        void Capture(ForzaHaptics.Util.LogLevel level, string message) => messages.Enqueue(message);
+        ForzaHaptics.Util.Log.Message += Capture;
+        try
+        {
+            store.AutoStartListening = false;
+            Assert.Contains(messages, message => message.Contains("Could not remember the auto-start listening preference"));
+        }
+        finally
+        {
+            ForzaHaptics.Util.Log.Message -= Capture;
+        }
+    }
+
     [Fact]
     public void FirstLaunchUsesBundledProfileAndNeverImportsRootConfig()
     {

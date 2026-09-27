@@ -57,6 +57,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private bool _isEngineRunning;
 
     [ObservableProperty]
+    private bool _autoStartListening;
+
+    [ObservableProperty]
     private string _engineStateText = "Stopped";
 
     [ObservableProperty]
@@ -140,6 +143,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _controller = controller;
+        _autoStartListening = _profiles.AutoStartListening;
 
         Settings = new SettingsViewModel(_profiles.Current) { IsReadOnly = _profiles.IsReadOnly };
         Settings.Changed += OnSettingChanged;
@@ -165,7 +169,13 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     public bool CanDeleteProfile => Profiles.Count > 1 && CanEditProfile;
     public bool IsEngineStopped => !IsEngineRunning;
 
-    public async Task InitializeAsync() => await StartEngineAsync();
+    public async Task InitializeAsync()
+    {
+        if (AutoStartListening)
+            await StartEngineAsync();
+    }
+
+    partial void OnAutoStartListeningChanged(bool value) => _profiles.AutoStartListening = value;
 
     public void RefreshStatus()
     {
@@ -176,7 +186,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         LeftMeter = IsEngineRunning ? _engine.PeakLeft : 0;
         RightMeter = IsEngineRunning ? _engine.PeakRight : 0;
 
-        string device = IsEngineRunning ? _engine.OutputDescription : "Output is not running";
+        string device = IsEngineRunning
+            ? string.IsNullOrEmpty(_engine.OutputDescription) ? "Waiting for controller" : _engine.OutputDescription
+            : "Output is not running";
         if (_engine.HasTriggers)
             device += " | desired: " + _engine.TriggerState;
         if (_engine.HasTriggers && _controller is not null)
@@ -214,8 +226,15 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         ControllerError = string.Empty;
         try
         {
-            await _engine.StopAsync();
-            await _controller.DisconnectAsync(deviceId);
+            await _engine.SuspendOutputAsync();
+            try
+            {
+                await _controller.DisconnectAsync(deviceId);
+            }
+            finally
+            {
+                await _engine.ResumeOutputAsync();
+            }
             Log.Info("Bluetooth controller disconnected. Reconnect it manually when ready.");
         }
         catch (Exception exception)

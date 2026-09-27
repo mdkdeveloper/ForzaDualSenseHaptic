@@ -49,15 +49,24 @@ public sealed class UdpTelemetryReceiver : IDisposable
                 Log.Warn($"ForwardTo: could not parse \"{target}\" (expected IP:port)");
             }
         }
-        if (_forwardTargets.Count > 0) _forwarder = new UdpClient(AddressFamily.InterNetwork);
-
         _udp = new UdpClient(AddressFamily.InterNetwork);
-        _udp.Client.Bind(new IPEndPoint(IPAddress.Any, port)); // SocketException if the port is busy
-        Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
-        _udp.Client.ReceiveTimeout = 100;
+        try
+        {
+            if (_forwardTargets.Count > 0) _forwarder = new UdpClient(AddressFamily.InterNetwork);
+            _udp.Client.Bind(new IPEndPoint(IPAddress.Any, port)); // SocketException if the port is busy
+            Port = ((IPEndPoint)_udp.Client.LocalEndPoint!).Port;
+            _udp.Client.ReceiveTimeout = 100;
 
-        _thread = new Thread(Loop) { IsBackground = true, Name = "FH6 telemetry", Priority = ThreadPriority.AboveNormal };
-        _thread.Start();
+            _thread = new Thread(Loop) { IsBackground = true, Name = "FH6 telemetry", Priority = ThreadPriority.AboveNormal };
+            _thread.Start();
+        }
+        catch
+        {
+            // A failed constructor cannot be disposed by the engine that requested it.
+            _udp.Dispose();
+            _forwarder?.Dispose();
+            throw;
+        }
     }
 
     private void Loop()

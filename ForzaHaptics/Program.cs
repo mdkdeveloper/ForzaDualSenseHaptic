@@ -229,12 +229,14 @@ internal static class LiveRun
 
 internal static class OutputFactory
 {
-    public static IHapticOutput? Create(string mode, AppConfig cfg, Func<int, IHapticSource> factory, out string? activeDeviceId, string? controllerDeviceId = null)
+    public static IHapticOutput? Create(string mode, AppConfig cfg, Func<int, IHapticSource> factory, out string? activeDeviceId, string? controllerDeviceId = null, bool quiet = false, Action<string>? reportIssue = null)
     {
+        void Error(string message) { reportIssue?.Invoke(message); if (!quiet) Log.Error(message); }
+        void Warn(string message) { reportIssue?.Invoke(message); if (!quiet) Log.Warn(message); }
         activeDeviceId = null;
         if (mode is not ("auto" or "usb" or "bt"))
         {
-            Log.Error($"Unknown output mode '{mode}' (auto | usb | bt)");
+            Error($"Unknown output mode '{mode}' (auto | usb | bt)");
             return null;
         }
 
@@ -244,12 +246,12 @@ internal static class OutputFactory
         {
             if (selected == null)
             {
-                Log.Error("The selected controller is no longer connected.");
+                Error("The selected controller is no longer connected.");
                 return null;
             }
             if ((mode == "usb" && selected.IsBluetooth) || (mode == "bt" && !selected.IsBluetooth))
             {
-                Log.Error("The selected controller does not match the requested output mode. Wait for controller status to refresh.");
+                Error("The selected controller does not match the requested output mode. Wait for controller status to refresh.");
                 return null;
             }
             mode = selected.IsBluetooth ? "bt" : "usb";
@@ -260,7 +262,7 @@ internal static class OutputFactory
             var usbControllers = hid.Where(h => !h.IsBluetooth).ToList();
             if (usbControllers.Count > 1)
             {
-                Log.Error("Connect only one USB DualSense to ensure audio and controller status refer to the same device.");
+                Error("Connect only one USB DualSense to ensure audio and controller status refer to the same device.");
                 return null;
             }
             MMDevice? device = null;
@@ -270,7 +272,7 @@ internal static class OutputFactory
             }
             catch (Exception ex)
             {
-                Log.Warn($"Failed to enumerate audio devices: {ex.Message}");
+                Warn($"Failed to enumerate audio devices: {ex.Message}");
             }
 
             if (device != null)
@@ -283,13 +285,14 @@ internal static class OutputFactory
                 }
                 catch (Exception ex)
                 {
-                    Log.Error($"DualSense USB audio: {ex.Message}");
+                    device.Dispose();
+                    Error($"DualSense USB audio: {ex.Message}");
                     if (mode == "usb") return null;
                 }
             }
             else if (mode == "usb")
             {
-                Log.Error("The DualSense audio device was not found. Connect the controller over USB (check with --list).");
+                Error("The DualSense audio device was not found. Connect the controller over USB (check with --list).");
                 return null;
             }
         }
@@ -305,18 +308,18 @@ internal static class OutputFactory
             }
             catch (Exception ex)
             {
-                Log.Error($"Bluetooth HID: {ex.Message}");
+                Error($"Bluetooth HID: {ex.Message}");
                 return null;
             }
         }
 
         if (mode == "bt")
-            Log.Error("No DualSense controller was found over Bluetooth.");
+            Error("No DualSense controller was found over Bluetooth.");
         else if (hid.Count > 0)
-            Log.Error("A DualSense controller is connected over USB, but its four-channel audio device is unavailable. " +
+            Error("A DualSense controller is connected over USB, but its four-channel audio device is unavailable. " +
                       "Make sure Quadraphonic is selected in the DualSense sound settings (see README).");
         else
-            Log.Error("No DualSense controller was found over USB or Bluetooth. Run with --list to inspect devices.");
+            Error("No DualSense controller was found over USB or Bluetooth. Run with --list to inspect devices.");
         return null;
     }
 }
@@ -324,7 +327,7 @@ internal static class OutputFactory
 /// <summary>Connect adaptive triggers. Failure does not stop haptic output.</summary>
 internal static class TriggerOutput
 {
-    public static TriggerHidWriter? Create(AppConfig cfg, HapticBus bus, bool preferBluetooth, string? controllerDeviceId = null)
+    public static TriggerHidWriter? Create(AppConfig cfg, HapticBus bus, bool preferBluetooth, string? controllerDeviceId = null, Action<string>? reportIssue = null)
     {
         if (!cfg.Triggers.Enabled) return null;
         try
@@ -335,14 +338,14 @@ internal static class TriggerOutput
                 : hid.FirstOrDefault(h => h.IsBluetooth == preferBluetooth);
             if (info == null)
             {
-                Log.Warn("Triggers: no DualSense HID device was found; adaptive triggers are disabled.");
+                (reportIssue ?? Log.Warn)("Triggers: no DualSense HID device was found; adaptive triggers are disabled.");
                 return null;
             }
             return new TriggerHidWriter(info, bus);
         }
         catch (Exception ex)
         {
-            Log.Warn($"Triggers: {ex.Message}; adaptive triggers are disabled, but haptics remain active.");
+            (reportIssue ?? Log.Warn)($"Triggers: {ex.Message}; adaptive triggers are disabled, but haptics remain active.");
             return null;
         }
     }

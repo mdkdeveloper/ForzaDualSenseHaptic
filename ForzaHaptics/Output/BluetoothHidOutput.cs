@@ -35,6 +35,7 @@ public sealed class BluetoothHidOutput : IHapticOutput
     private long _sent, _errors;
 
     public string Description { get; }
+    public bool IsAlive => _running && _thread.IsAlive;
     public string Health => Interlocked.Read(ref _errors) > 0 ? $"BT write errors: {Interlocked.Read(ref _errors)}" : "";
 
     public BluetoothHidOutput(HidDevice device, Func<int, IHapticSource> sourceFactory)
@@ -47,16 +48,24 @@ public sealed class BluetoothHidOutput : IHapticOutput
             throw new IOException("Could not open the DualSense HID device (HidHide or another application may be hiding it)");
 
         _stream = stream;
-        _stream.WriteTimeout = 200;
-        _source = sourceFactory(SampleRate);
-
-        _thread = new Thread(Loop)
+        try
         {
-            IsBackground = true,
-            Priority = ThreadPriority.Highest,
-            Name = "DualSense BT haptics",
-        };
-        Description = $"Bluetooth HID (experimental): {DualSenseHid.SafeProductName(device)}, 3000 Hz, report 0x32";
+            _stream.WriteTimeout = 200;
+            _source = sourceFactory(SampleRate);
+
+            _thread = new Thread(Loop)
+            {
+                IsBackground = true,
+                Priority = ThreadPriority.Highest,
+                Name = "DualSense BT haptics",
+            };
+            Description = $"Bluetooth HID (experimental): {DualSenseHid.SafeProductName(device)}, 3000 Hz, report 0x32";
+        }
+        catch
+        {
+            _stream.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Empty 0x32 report with populated headers.</summary>
@@ -137,7 +146,7 @@ public sealed class BluetoothHidOutput : IHapticOutput
                     if (++consecutiveErrors == 1) Log.Warn($"BT: write error ({ex.Message})");
                     if (consecutiveErrors > 300)
                     {
-                        Log.Error("BT: the controller is not responding; stopping output. Reconnect the DualSense and restart the application.");
+                        Log.Warn("BT: the controller is not responding; output will retry automatically.");
                         break;
                     }
                 }
@@ -156,6 +165,7 @@ public sealed class BluetoothHidOutput : IHapticOutput
         }
         finally
         {
+            _running = false;
             if (timerSet)
             {
                 try { TimeEndPeriod(1); } catch { /* ignore */ }

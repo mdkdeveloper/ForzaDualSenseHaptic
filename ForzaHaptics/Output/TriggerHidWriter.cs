@@ -33,6 +33,7 @@ public sealed class TriggerHidWriter : IDisposable
 
     public string Description { get; }
     public string DeviceId { get; }
+    public bool IsAlive => _running && _thread.IsAlive;
     // A successful OS write is not an acknowledgement from the controller.
     public string Health => $"trigger HID: {Interlocked.Read(ref _sent)} writes, {Interlocked.Read(ref _errors)} errors" +
         (Volatile.Read(ref _lastSent) is { } pair ? $" | last written {pair}" : " | no report written") +

@@ -38,7 +38,10 @@ public sealed class ControllerHardwareTests
             try
             {
                 Assert.True(engine.Start(new EngineOptions { Test = true, ControllerDeviceId = deviceId }),
-                    "Haptic output could not start for the monitored controller.");
+                    "Haptic session could not start for the monitored controller.");
+                // Discovery and output attachment continue asynchronously after the session starts.
+                for (int attempt = 0; attempt < 20 && engine.ActiveControllerDeviceId != deviceId; attempt++)
+                    await Task.Delay(250, timeout.Token);
                 Assert.Equal(deviceId, engine.ActiveControllerDeviceId);
                 for (int sample = 0; sample < 6; sample++)
                 {
