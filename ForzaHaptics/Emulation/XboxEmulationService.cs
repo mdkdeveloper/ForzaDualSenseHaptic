@@ -11,16 +11,11 @@ public interface IXboxEmulationService : IDisposable
     bool IsEnabled { get; }
     bool IsBusy { get; }
     XboxEmulationState State => IsBusy ? XboxEmulationState.Starting : IsEnabled ? XboxEmulationState.Running : XboxEmulationState.Off;
-    bool DiagnosticsRestartRequired => false;
     string Status { get; }
     string? Error { get; }
     XboxBackend Backend => XboxBackend.ViGEm;
     Task SetBackendAsync(XboxBackend backend) => Task.CompletedTask;
     Task InstallHidMaestroAsync() => Task.CompletedTask;
-    bool DiagnosticsEnabled => false;
-    string? DiagnosticsError => null;
-    string DiagnosticsDirectory => ImpulseDiagnostics.LogDirectory;
-    void SetDiagnosticsEnabled(bool enabled) { }
     Task InitializeAsync();
     Task SetEnabledAsync(bool enabled);
     Task CheckAgainAsync();
@@ -37,7 +32,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
     private readonly IHidHideService _hide;
     private IVirtualXboxFactory _factory;
     private XboxBackend _backend;
-    private readonly ImpulseDiagnostics _diagnostics = new();
     private readonly ImpulsePlayback _playback = new();
     private readonly Func<ControllerSnapshot, IXboxRumbleOutput> _createRumble;
     private readonly Func<IDisposable> _acquireLease;
@@ -56,13 +50,11 @@ public sealed class XboxEmulationService : IXboxEmulationService
     private volatile bool _enabled, _hapticsActive, _disposed;
     private int _busy;
     private volatile XboxEmulationState _state;
-    private volatile bool _shuttingDown, _diagnosticsRestartRequired;
+    private volatile bool _shuttingDown;
     private TaskCompletionSource? _operationCompletion;
-    private string? _operationId;
     private long _phaseStarted;
     private long _feedbackEpoch;
     private long _priorityEpoch;
-    private long _inputReceived, _inputSubmitted, _inputDropped, _lastInputSummary;
     private volatile string _status = "Off";
     private volatile string? _error;
     private sealed record Feedback(long Epoch, long PriorityEpoch, XboxFeedback Packet);
@@ -79,7 +71,7 @@ public sealed class XboxEmulationService : IXboxEmulationService
         _controller = controller;
         _hide = hide;
         _factory = factory;
-        _createRumble = createRumble ?? (snapshot => new DualSenseRumbleOutput(snapshot, _diagnostics.Record));
+        _createRumble = createRumble ?? (snapshot => new DualSenseRumbleOutput(snapshot));
         _acquireLease = acquireLease;
         _clock = clock ?? (() => Environment.TickCount64);
         controller.InputReceived += OnInput;
@@ -89,40 +81,9 @@ public sealed class XboxEmulationService : IXboxEmulationService
     public bool IsEnabled => _enabled;
     public bool IsBusy => State is XboxEmulationState.Starting or XboxEmulationState.Stopping;
     public XboxEmulationState State => _state;
-    public bool DiagnosticsRestartRequired => _diagnosticsRestartRequired;
     public string Status => IsBusy ? $"{_status} — {Math.Max(0, Environment.TickCount64 - Interlocked.Read(ref _phaseStarted)) / 1000.0:F1} s" : _status;
     public string? Error => _error;
     public XboxBackend Backend => _backend;
-    public bool DiagnosticsEnabled => _diagnostics.IsEnabled;
-    public string? DiagnosticsError => _diagnostics.Error;
-    public string DiagnosticsDirectory => ImpulseDiagnostics.LogDirectory;
-
-    public void SetDiagnosticsEnabled(bool enabled)
-    {
-        // Draining the file worker must never hold up input forwarding or emergency Off.
-        if (!enabled) { _diagnostics.Stop(); return; }
-        object metadata;
-        XboxBackend backend;
-        lock (_gate)
-        {
-            if (_disposed) return;
-            backend = _backend;
-            metadata = new { application = typeof(XboxEmulationService).Assembly.GetName().Version?.ToString(),
-                    backend = _backend.ToString(), sdk = _backend == XboxBackend.HidMaestro ? "1.9.0" : null,
-                    profile = _backend == XboxBackend.HidMaestro ? HidMaestroXboxFactory.ProfileId : "Xbox360",
-                    transport = _controller.Snapshot.Transport.ToString(), telemetryActive = _hapticsActive,
-                    emulation = DiagnosticState() };
-        }
-        _diagnostics.Start(metadata);
-        if (backend == XboxBackend.HidMaestro)
-        {
-            var sdkDiagnostics = HidMaestroXboxFactory.ConfigureSdkDiagnostics(true);
-            _diagnosticsRestartRequired = sdkDiagnostics.RequiresRestart;
-            _diagnostics.Record("hidmaestro_sdk_diagnostics", sdkDiagnostics);
-            try { _diagnostics.Record("driver_installation", HidMaestroXboxFactory.ReadInstallationStatus()); }
-            catch (Exception ex) { _diagnostics.Record("driver_probe_error", new { error = ex.Message }); }
-        }
-    }
 
     public Task SetBackendAsync(XboxBackend backend) => RunCommand(() =>
     {
@@ -132,12 +93,11 @@ public sealed class XboxEmulationService : IXboxEmulationService
         Cleanup();
         VerifyPreviousRemoval();
         _factory = backend == XboxBackend.HidMaestro
-            ? new HidMaestroXboxFactory(_diagnostics.Record, () => _diagnostics.IsEnabled) : new VirtualXboxFactory();
+            ? new HidMaestroXboxFactory() : new VirtualXboxFactory();
         _backend = backend;
         _error = null;
         _faulted = false;
         _status = "Off";
-        _diagnostics.Record("backend", new { backend = backend.ToString() });
     }, cleanupOnFailure: false);
 
     public Task InstallHidMaestroAsync() => RunCommand(() =>
@@ -147,17 +107,15 @@ public sealed class XboxEmulationService : IXboxEmulationService
         _error = null;
         _faulted = false;
         _status = "Off — HIDMaestro installed";
-        _diagnostics.Record("driver_install", new { result = "completed", sdk = "1.9.0" });
     }, cleanupOnFailure: false);
 
     private void OnInput(ControllerInputState input)
     {
-        Interlocked.Increment(ref _inputReceived);
         Volatile.Write(ref _latest, input);
         if (!_enabled || _disposed) return;
         _inputs.Enqueue(input);
         // A slow driver cannot retain an unbounded queue of obsolete input.
-        while (_inputs.Count > 256 && _inputs.TryDequeue(out _)) Interlocked.Increment(ref _inputDropped);
+        while (_inputs.Count > 256 && _inputs.TryDequeue(out _)) { }
     }
 
     private Task RunCommand(Action action, bool cleanupOnFailure = true,
@@ -170,11 +128,9 @@ public sealed class XboxEmulationService : IXboxEmulationService
             if (_disposed || _shuttingDown || _busy != 0) return Task.CompletedTask;
             _busy = 1;
             _state = transition;
-            _operationId = Guid.NewGuid().ToString("N");
             completion = _operationCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _status = transition == XboxEmulationState.Stopping ? "Stopping Xbox emulation" : "Preparing Xbox emulation";
             Interlocked.Exchange(ref _phaseStarted, Environment.TickCount64);
-            _diagnostics.Record("lifecycle_started", new { operationId = _operationId, state = _state.ToString(), phase = _status });
         }
         _ = Task.Run(() =>
         {
@@ -183,7 +139,7 @@ public sealed class XboxEmulationService : IXboxEmulationService
                 try
                 {
                     if (_factory is IVirtualXboxLifecycleFactory lifecycle)
-                        lifecycle.SetOperation(_operationId!, SetPhase);
+                        lifecycle.SetPhaseCallback(SetPhase);
                     if (!_shuttingDown) action();
                 }
                 catch (Exception ex)
@@ -192,17 +148,13 @@ public sealed class XboxEmulationService : IXboxEmulationService
                     else
                     {
                         _error = ex.Message;
-                        _diagnostics.Record("command_rejected", new { error = ex.Message });
                         Log.Warn("Xbox emulation: " + ex.Message);
                     }
                 }
                 finally
                 {
-                    _diagnostics.Record("lifecycle_phase_completed", new { operationId = _operationId,
-                        phase = _status, elapsedMs = Math.Max(0, Environment.TickCount64 - Interlocked.Read(ref _phaseStarted)) });
                     _state = _faulted ? XboxEmulationState.Failed : _xbox != null
                         ? XboxEmulationState.Running : XboxEmulationState.Off;
-                    _diagnostics.Record("lifecycle_completed", new { operationId = _operationId, state = _state.ToString(), error = _error });
                     _busy = 0;
                     completion.TrySetResult();
                 }
@@ -215,12 +167,8 @@ public sealed class XboxEmulationService : IXboxEmulationService
     {
         lock (_gate)
         {
-            long now = Environment.TickCount64;
-            _diagnostics.Record("lifecycle_phase_completed", new { operationId = _operationId,
-                phase = _status, elapsedMs = Math.Max(0, now - Interlocked.Read(ref _phaseStarted)) });
             _status = phase;
             Interlocked.Exchange(ref _phaseStarted, Environment.TickCount64);
-            _diagnostics.Record("lifecycle_phase", new { operationId = _operationId, phase, state = _state.ToString() });
         }
     }
 
@@ -327,11 +275,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
         }
         finally
         {
-            if (_diagnostics.IsEnabled && _clock() - _lastInputSummary >= 1000)
-            {
-                _lastInputSummary = _clock();
-                _diagnostics.Record("input_status", DiagnosticState());
-            }
             Monitor.Exit(_gate);
         }
         if (lifecycleNeeded || failure != null)
@@ -374,7 +317,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
                 return;
             }
             _deviceId = snapshot.DeviceId;
-            _diagnostics.ResetSequence();
             VerifyPreviousRemoval();
             _state = XboxEmulationState.Starting;
             SetPhase("Creating virtual controller");
@@ -384,17 +326,12 @@ public sealed class XboxEmulationService : IXboxEmulationService
             _feedbackHandler = packet =>
             {
                 long priority = Interlocked.Read(ref _priorityEpoch);
-                string disposition = !packet.IsValid ? packet.RejectionReason ?? "unsupported report" :
-                    _disposed || _shuttingDown || !_enabled || _suspended ? "emulation stopped" :
-                    epoch != Interlocked.Read(ref _feedbackEpoch) ? "obsolete device" :
-                    _hapticsActive ? "telemetry/test priority" :
-                    !Fresh(Volatile.Read(ref _latest), snapshot.DeviceId) || !_controller.Snapshot.IsInputFreshAt(_clock())
-                        ? "physical input stale" : "queued";
-                _diagnostics.RecordFeedback(packet, disposition);
-                if (disposition != "queued") return;
+                if (!packet.IsValid || _disposed || _shuttingDown || !_enabled || _suspended ||
+                    epoch != Interlocked.Read(ref _feedbackEpoch) || _hapticsActive ||
+                    !Fresh(Volatile.Read(ref _latest), snapshot.DeviceId) ||
+                    !_controller.Snapshot.IsInputFreshAt(_clock())) return;
                 _feedback.Enqueue(new Feedback(epoch, priority, packet));
-                while (_feedback.Count > 1024 && _feedback.TryDequeue(out _))
-                    _diagnostics.Record("feedback_queue_overflow", new { dropped = 1 });
+                while (_feedback.Count > 1024 && _feedback.TryDequeue(out _)) { }
             };
             created.FeedbackReceived += _feedbackHandler;
             // Driver creation can take seconds. Refresh before submitting physical input.
@@ -411,8 +348,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
             SubmitInput(latest!);
             SetPhase("Hiding physical controller");
             _hide.Hide(_deviceId);
-            _diagnostics.Record("controller_connected", new { backend = _backend.ToString(),
-                transport = snapshot.Transport.ToString(), profile = _backend == XboxBackend.HidMaestro ? HidMaestroXboxFactory.ProfileId : "Xbox360" });
             _neutralized = false;
             _state = XboxEmulationState.Running;
         }
@@ -422,7 +357,7 @@ public sealed class XboxEmulationService : IXboxEmulationService
             if (!_neutralized)
             {
                 SubmitInput(new ControllerInputState(_deviceId!, _clock(), 0, 0, 0, 0, 0, 0, 0));
-                StopRumble("physical input stale");
+                StopRumble();
                 Interlocked.Increment(ref _priorityEpoch);
                 _neutralized = true;
             }
@@ -443,7 +378,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
                 _playback.Accept(feedback.Packet, _clock());
                 WritePlayback(snapshot);
             }
-            else _diagnostics.Record("feedback_discarded", new { feedback.Packet.Sequence, reason = "ownership changed after enqueue" });
         }
         if (!_hapticsActive) WritePlayback(snapshot);
         _status = _hapticsActive ? "Connected — Forza haptics priority" : "Connected";
@@ -452,34 +386,12 @@ public sealed class XboxEmulationService : IXboxEmulationService
     private void SubmitInput(ControllerInputState input)
     {
         _xbox!.Submit(input);
-        _inputSubmitted++;
-    }
-
-    private object DiagnosticState()
-    {
-        var snapshot = _controller.Snapshot;
-        var latest = Volatile.Read(ref _latest);
-        return new
-        {
-            enabled = _enabled, virtualDeviceCreated = _xbox != null, status = Status, error = _error,
-            state = State.ToString(), operationId = _operationId,
-            faulted = _faulted, suspended = _suspended, telemetryActive = _hapticsActive,
-            physicalConnected = snapshot.IsConnected, transport = snapshot.Transport.ToString(),
-            inputFresh = Fresh(latest, snapshot.DeviceId) && snapshot.IsInputFreshAt(_clock()),
-            inputAgeMs = latest is null ? (long?)null : _clock() - latest.Timestamp,
-            receivedTotal = Interlocked.Read(ref _inputReceived), submittedTotal = _inputSubmitted,
-            droppedInputTotal = Interlocked.Read(ref _inputDropped), queuedInput = _inputs.Count,
-            evidence = "Submit completion confirms SDK input submission, not reception by the game."
-        };
     }
 
     private void WritePlayback(ControllerSnapshot snapshot)
     {
         long now = _clock();
         if (_playback.Select(now) is not { } output) return;
-        _diagnostics.Record("translated_effect", new { output.Large, output.Small,
-            left = output.Triggers?.L2.ToString(), right = output.Triggers?.R2.ToString(),
-            envelope = _playback.Describe(now), timestamp = now });
         _rumble ??= _createRumble(snapshot);
         _rumble.Write(output.Large, output.Small, output.Triggers);
         _playback.Written(output, now);
@@ -496,10 +408,9 @@ public sealed class XboxEmulationService : IXboxEmulationService
             Interlocked.Increment(ref _priorityEpoch);
             _feedback.Clear();
             _playback.Reset();
-            _diagnostics.Record("ownership", new { telemetryActive = active });
             if (active)
             {
-                StopRumble("telemetry/test priority");
+                StopRumble();
                 if (_pendingRumbleResetDevice != null)
                 {
                     var snapshot = _controller.Snapshot;
@@ -523,7 +434,7 @@ public sealed class XboxEmulationService : IXboxEmulationService
         {
             _suspended = true;
             Interlocked.Increment(ref _feedbackEpoch);
-            StopRumble("controller suspension");
+            StopRumble();
             pending = _operationCompletion?.Task ?? Task.CompletedTask;
         }
         await pending.ConfigureAwait(false);
@@ -539,11 +450,10 @@ public sealed class XboxEmulationService : IXboxEmulationService
         lock (_gate) _suspended = false;
     }
 
-    private void StopRumble(string reason = "emulation cleanup")
+    private void StopRumble()
     {
         _feedback.Clear();
         _playback.Reset();
-        _diagnostics.Record("off", new { reason });
         var rumble = _rumble;
         _rumble = null;
         try { rumble?.Dispose(); } // writes zero motors and restores audio haptics synchronously
@@ -588,7 +498,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
         _state = XboxEmulationState.Failed;
         _error = error;
         _status = "Error";
-        _diagnostics.Record("emulation_error", new { error });
         Log.Warn("Xbox emulation: " + error);
     }
 
@@ -610,9 +519,8 @@ public sealed class XboxEmulationService : IXboxEmulationService
         lock (_gate)
         {
             _disposed = true;
-            _operationId = Guid.NewGuid().ToString("N");
             if (_factory is IVirtualXboxLifecycleFactory lifecycle)
-                lifecycle.SetOperation(_operationId, SetPhase);
+                lifecycle.SetPhaseCallback(SetPhase);
             try { Cleanup(); } catch (Exception ex) { Log.Warn("Xbox shutdown: " + ex.Message); }
             // A second process that failed to acquire ownership must never recover the first one's journal.
             if (_lease != null)
@@ -621,7 +529,6 @@ public sealed class XboxEmulationService : IXboxEmulationService
             _lease = null;
             _state = XboxEmulationState.Off;
         }
-        _diagnostics.Dispose();
     }
 }
 

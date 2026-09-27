@@ -333,38 +333,138 @@ public sealed class XboxEmulationTests
         Assert.Equal("Connected", f.Service.Status);
     }
 
-    [Fact]
-    public async Task TelemetryPriorityQuiescesImmediatelyAndDiscardsOldFeedback()
+    [Theory]
+    [InlineData(XboxBackend.ViGEm)]
+    [InlineData(XboxBackend.HidMaestro)]
+    public async Task TelemetryPriorityQuiescesImmediatelyAndDiscardsOldFeedback(XboxBackend backend)
     {
         using var f = new Fixture();
         f.Connect();
         await f.Service.SetEnabledAsync(true);
-        f.Factory.Last!.Feedback(120, 70);
+        var packet = FeedbackFor(backend, f.Now);
+        f.Factory.Last!.Feedback(packet);
         f.Service.Tick();
+        var previous = Assert.Single(f.Rumbles);
+        AssertFeedbackOutput(previous, packet);
+        f.Factory.Last.Feedback(packet); // Pending feedback must also be discarded at handoff.
         f.Service.SetHapticsActive(true);
-        Assert.True(f.Rumbles.Single().Disposed);
-        f.Factory.Last.Feedback(250, 240);
+        Assert.True(previous.Disposed);
+        f.Factory.Last.Feedback(packet);
         f.Service.Tick();
         Assert.Equal("Connected — Forza haptics priority", f.Service.Status);
         f.Service.SetHapticsActive(false);
+        f.Now += 100;
         f.Service.Tick();
         Assert.Single(f.Rumbles);
-        f.Factory.Last.Feedback(60, 40);
+        Assert.Single(previous.Writes);
+        f.Factory.Last.Feedback(packet with { Timestamp = f.Now });
         f.Service.Tick();
-        Assert.Equal((60, 40), f.Rumbles[1].Writes.Single());
+        Assert.Equal(2, f.Rumbles.Count);
+        AssertFeedbackOutput(f.Rumbles[1], packet);
     }
 
-    [Fact]
-    public async Task EnabledTelemetryWithoutAnyPacketsStillSuppressesFeedback()
+    [Theory]
+    [InlineData(XboxBackend.ViGEm)]
+    [InlineData(XboxBackend.HidMaestro)]
+    public async Task EnabledTelemetryWithoutAnyPacketsStillSuppressesFeedback(XboxBackend backend)
     {
         using var f = new Fixture();
         f.Service.SetHapticsActive(true);
         f.Connect();
         await f.Service.SetEnabledAsync(true);
-        f.Factory.Last!.Feedback(255, 255);
+        for (int i = 0; i < 3; i++)
+        {
+            f.Now += 1000;
+            f.Connect(); // Controller input stays fresh while no telemetry packets arrive.
+            f.Factory.Last!.Feedback(FeedbackFor(backend, f.Now));
+            f.Service.Tick();
+            Assert.Empty(f.Rumbles);
+            Assert.Equal("Connected — Forza haptics priority", f.Service.Status);
+        }
+        Assert.True(f.Service.IsEnabled);
+        f.Service.SetHapticsActive(false);
         f.Service.Tick();
         Assert.Empty(f.Rumbles);
-        Assert.True(f.Service.IsEnabled);
+        var packet = FeedbackFor(backend, f.Now);
+        f.Factory.Last!.Feedback(packet);
+        f.Service.Tick();
+        AssertFeedbackOutput(Assert.Single(f.Rumbles), packet);
+    }
+
+    [Theory]
+    [InlineData(XboxBackend.ViGEm)]
+    [InlineData(XboxBackend.HidMaestro)]
+    public async Task TelemetryPrioritySurvivesControllerReconnectAndEmulationRestart(XboxBackend backend)
+    {
+        using var f = new Fixture();
+        f.Connect();
+        await f.Service.SetEnabledAsync(true);
+        var staleCallback = f.Factory.Last!.CaptureFeedback();
+        f.Service.SetHapticsActive(true);
+        f.Controller.State = ControllerSnapshot.Disconnected;
+        f.Service.Tick();
+        f.Connect("bt");
+        f.Service.Tick();
+        f.Factory.Last!.Feedback(FeedbackFor(backend, f.Now));
+        f.Service.Tick();
+        Assert.Empty(f.Rumbles);
+        await f.Service.SetEnabledAsync(false);
+        await f.Service.SetEnabledAsync(true);
+        f.Factory.Last!.Feedback(FeedbackFor(backend, f.Now));
+        f.Service.Tick();
+        Assert.Empty(f.Rumbles);
+        f.Service.SetHapticsActive(false);
+        staleCallback!(FeedbackFor(backend, f.Now));
+        f.Service.Tick();
+        Assert.Empty(f.Rumbles);
+        var packet = FeedbackFor(backend, f.Now);
+        f.Factory.Last.Feedback(packet);
+        f.Service.Tick();
+        AssertFeedbackOutput(Assert.Single(f.Rumbles), packet);
+    }
+
+    [Fact]
+    public async Task TelemetryHandoffClearsScheduledHidMaestroImpulseBeforeItsDelayExpires()
+    {
+        using var f = new Fixture();
+        f.Connect();
+        await f.Service.SetEnabledAsync(true);
+        var packet = XboxFeedbackDecoder.Decode(HIDMaestro.HMOutputSource.HidOutput,
+            0x0F, Convert.FromHexString("64326432041402"), 1, f.Now, DateTimeOffset.UtcNow);
+        f.Factory.Last!.Feedback(packet);
+        f.Service.Tick();
+        var previous = Assert.Single(f.Rumbles);
+        Assert.Equal((0, 0), Assert.Single(previous.Writes));
+        Assert.Equal(TriggerPair.Off, Assert.Single(previous.TriggerWrites));
+        f.Service.SetHapticsActive(true);
+        f.Service.SetHapticsActive(false);
+        f.Now += 210; // Within the cleared packet's first active interval.
+        f.Service.Tick();
+        Assert.True(previous.Disposed);
+        Assert.Single(f.Rumbles);
+        Assert.Single(previous.Writes);
+        var freshPacket = FeedbackFor(XboxBackend.HidMaestro, f.Now);
+        f.Factory.Last.Feedback(freshPacket);
+        f.Service.Tick();
+        Assert.Equal(2, f.Rumbles.Count);
+        AssertFeedbackOutput(f.Rumbles[1], freshPacket);
+    }
+
+    private static XboxFeedback FeedbackFor(XboxBackend backend, long timestamp)
+        => backend == XboxBackend.ViGEm
+            ? XboxFeedback.FromViGEm(120, 70) with { Timestamp = timestamp }
+            : XboxFeedbackDecoder.Decode(HIDMaestro.HMOutputSource.HidOutput,
+                0x0F, Convert.FromHexString("64326432FF0002"), 1, timestamp, DateTimeOffset.UtcNow);
+
+    private static void AssertFeedbackOutput(FakeRumble output, XboxFeedback packet)
+    {
+        Assert.Equal(((int)packet.Large, (int)packet.Small), Assert.Single(output.Writes));
+        var triggers = Assert.Single(output.TriggerWrites);
+        if (packet.LeftTrigger == null)
+            Assert.Null(triggers);
+        else
+            Assert.Equal(new TriggerPair(TriggerEffect.Vibration(15, 8, 1),
+                TriggerEffect.Vibration(15, 4, 1)), triggers);
     }
 
     [Fact]
@@ -504,7 +604,7 @@ public sealed class XboxEmulationTests
         public int Created;
         public bool PendingRemoval, AllowRemovalCompletion;
         public bool HasPendingRemoval => PendingRemoval;
-        public void SetOperation(string operationId, Action<string> phase) { }
+        public void SetPhaseCallback(Action<string> phase) { }
         public void VerifyPreviousRemoval()
         {
             if (!PendingRemoval) return;

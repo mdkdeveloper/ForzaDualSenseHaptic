@@ -15,80 +15,25 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
     public const string ProfileId = "xbox-series-xs-bt";
     public const string SdkVersion = "1.9.0";
     private static readonly object Gate = new();
-    private static readonly object DiagnosticsGate = new();
     private readonly HidMaestroPnp _pnp = new();
-    private string _operationId = "initial";
     private Action<string>? _phase;
     public bool HasPendingRemoval { get; private set; }
 
-    public void SetOperation(string operationId, Action<string> phase)
-    {
-        _operationId = operationId;
-        _phase = phase;
-    }
+    public void SetPhaseCallback(Action<string> phase) => _phase = phase;
 
     private void Phase(string name)
     {
         _phase?.Invoke(name);
-        Record("hidmaestro_phase", new { operationId = _operationId, phase = name });
     }
 
     public void VerifyPreviousRemoval()
     {
         Phase("Waiting for Windows device removal");
         HasPendingRemoval = true;
-        _pnp.Wait(true, data => Record("hidmaestro_pnp", new { operationId = _operationId, snapshot = data }));
+        _pnp.Wait(true);
         HasPendingRemoval = false;
     }
     private static readonly Lazy<string> BundleHash = new(ComputeBundleHash);
-    private static bool _sdkContextCreated, _sdkDiagnosticsEnabled;
-    private readonly Action<string, object>? _record;
-    private readonly Func<bool>? _diagnosticsEnabled;
-
-    public HidMaestroXboxFactory(Action<string, object>? record = null, Func<bool>? diagnosticsEnabled = null)
-    {
-        _record = record;
-        _diagnosticsEnabled = diagnosticsEnabled;
-    }
-
-    public sealed record SdkDiagnosticStatus(bool Requested, bool Enabled, bool RequiresRestart, string LogPath);
-
-    // SDK 1.9.0 snapshots its switch in a static initializer. Setting it after
-    // the first context cannot reliably enable logging until the next process.
-    public static SdkDiagnosticStatus ConfigureSdkDiagnostics(bool requested)
-    {
-        lock (DiagnosticsGate)
-        {
-            if (!_sdkContextCreated && requested)
-            {
-                Environment.SetEnvironmentVariable("HIDMAESTRO_DIAG", "1", EnvironmentVariableTarget.Process);
-                Environment.SetEnvironmentVariable("HIDMAESTRO_TIMING", "1", EnvironmentVariableTarget.Process);
-            }
-            bool enabled = _sdkContextCreated ? _sdkDiagnosticsEnabled
-                : Environment.GetEnvironmentVariable("HIDMAESTRO_DIAG") == "1" && Environment.GetEnvironmentVariable("HIDMAESTRO_TIMING") == "1";
-            return new(requested, enabled, requested && !enabled && _sdkContextCreated,
-                Path.Combine(Path.GetTempPath(), "HIDMaestro", "teardown_diag.log"));
-        }
-    }
-
-    private static HMContext CreateContext()
-    {
-        lock (DiagnosticsGate)
-        {
-            if (!_sdkContextCreated)
-                _sdkDiagnosticsEnabled = Environment.GetEnvironmentVariable("HIDMAESTRO_DIAG") == "1"
-                    && Environment.GetEnvironmentVariable("HIDMAESTRO_TIMING") == "1";
-            _sdkContextCreated = true;
-        }
-        return new HMContext();
-    }
-
-    private void Record(string kind, object data)
-    {
-        // Diagnostic failures must not interfere with device cleanup or input.
-        try { _record?.Invoke(kind, data); } catch { }
-    }
-
     public sealed record InstallationStatus(bool MainPackagePresent, bool CompanionPackagePresent,
         string ExpectedManifestSha256, string? InstalledManifestSha256,
         string[] InstalledDriverVersions, string? ProbeError)
@@ -97,7 +42,7 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
             && string.Equals(ExpectedManifestSha256, InstalledManifestSha256, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Read-only evidence for preflight and session diagnostics. The registry
+    /// <summary>Read-only evidence for driver preflight checks. The registry
     /// manifest is the pinned SDK's successful-deployment receipt, not the SDK DLL hash.</summary>
     public static InstallationStatus ReadInstallationStatus()
     {
@@ -170,7 +115,7 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
             RequireNoPresentControllers();
             // Explicit user action only: SDK installs its signing certificate and
             // driver packages, and sweeps existing HM devices during repair.
-            using var context = CreateContext();
+            using var context = new HMContext();
             context.InstallDriver();
         }
     }
@@ -185,28 +130,20 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
             // SDK 1.9.0 allocates shared-memory indices per process, not globally.
             // Refuse concurrent HM consumers instead of colliding with index 0.
             RequireNoPresentControllers();
-            Record("hidmaestro_sdk_diagnostics", ConfigureSdkDiagnostics(_diagnosticsEnabled?.Invoke() == true));
-            var elapsed = Stopwatch.StartNew();
-            Record("hidmaestro_create_started", new { operationId = _operationId, profile = ProfileId, identity = HidMaestroPnp.Identity });
             HMContext? context = null;
             try
             {
-                context = CreateContext();
+                context = new HMContext();
                 context.LoadDefaultProfiles();
                 var profile = context.GetProfile(ProfileId)
                     ?? throw new InvalidOperationException($"HIDMaestro profile {ProfileId} is missing.");
                 var controller = context.CreateController(profile, HidMaestroPnp.Identity);
                 Phase("Checking Windows device readiness");
-                _pnp.Wait(false, data => Record("hidmaestro_pnp", new { operationId = _operationId, snapshot = data }));
-                var device = new VirtualXbox(context, controller, this);
-                Record("hidmaestro_created", new { operationId = _operationId, profile = ProfileId, identity = controller.IdentityKey,
-                    elapsedMs = elapsed.ElapsedMilliseconds,
-                    readiness = "Windows device tree started with an active HID interface; Steam/game recognition is not verified" });
-                return device;
+                _pnp.Wait(false);
+                return new VirtualXbox(context, controller, this);
             }
             catch (Exception ex)
             {
-                Record("hidmaestro_create_failed", new { operationId = _operationId, elapsedMs = elapsed.ElapsedMilliseconds, error = ex.ToString() });
                 if (context is not null)
                 {
                     HasPendingRemoval = true;
@@ -215,7 +152,6 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
                     try
                     {
                         context.Dispose();
-                        Record("hidmaestro_sdk_dispose_returned", new { operationId = _operationId, failedCreate = true });
                         VerifyPreviousRemoval();
                     }
                     catch (Exception cleanupError)
@@ -237,8 +173,10 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
 
     private void CaptureBeforeRemoval()
     {
-        try { Record("hidmaestro_pnp_before_removal", new { operationId = _operationId, nodes = _pnp.Capture() }); }
-        catch (Exception ex) { Record("hidmaestro_pnp_probe_failed", new { operationId = _operationId, error = ex.ToString() }); }
+        // Remember descendants before their parent disappears during disposal.
+        // A failed optional snapshot must not prevent cleanup; removal checks still probe.
+        try { _pnp.Capture(); }
+        catch { }
     }
 
     private static void RequireNoPresentControllers()
@@ -312,7 +250,6 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
     {
         private readonly HMContext _context;
         private readonly HMController _controller;
-        private readonly Action<string, object> _record;
         private readonly HidMaestroXboxFactory _owner;
         private bool _disposed;
         public event Action<XboxFeedback>? FeedbackReceived;
@@ -322,7 +259,6 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
             _context = context;
             _controller = controller;
             _owner = owner;
-            _record = owner.Record;
             _controller.OutputReceived += OnOutput;
         }
 
@@ -356,23 +292,10 @@ public sealed class HidMaestroXboxFactory : IVirtualXboxFactory, IVirtualXboxLif
             _controller.OutputReceived -= OnOutput;
             _owner.HasPendingRemoval = true;
             // Dispose this owned context; never call the SDK global removal API.
-            var elapsed = Stopwatch.StartNew();
-            _record("hidmaestro_dispose_started", new { operationId = _owner._operationId, identity = _controller.IdentityKey });
-            try
-            {
-                _owner.Phase("Removing Xbox device");
-                _owner.CaptureBeforeRemoval();
-                _context.Dispose();
-                _record("hidmaestro_sdk_dispose_returned", new { identity = _controller.IdentityKey,
-                    elapsedMs = elapsed.ElapsedMilliseconds, operationId = _owner._operationId });
-                _owner.VerifyPreviousRemoval();
-            }
-            catch (Exception ex)
-            {
-                _record("hidmaestro_dispose_failed", new { identity = _controller.IdentityKey,
-                    elapsedMs = elapsed.ElapsedMilliseconds, operationId = _owner._operationId, error = ex.ToString() });
-                throw;
-            }
+            _owner.Phase("Removing Xbox device");
+            _owner.CaptureBeforeRemoval();
+            _context.Dispose();
+            _owner.VerifyPreviousRemoval();
         }
     }
 }

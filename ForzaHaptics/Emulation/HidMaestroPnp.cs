@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,7 +8,7 @@ namespace ForzaHaptics.Emulation;
 public interface IVirtualXboxLifecycleFactory
 {
     bool HasPendingRemoval { get; }
-    void SetOperation(string operationId, Action<string> phase);
+    void SetPhaseCallback(Action<string> phase);
     void VerifyPreviousRemoval();
 }
 
@@ -51,21 +50,16 @@ internal sealed class HidMaestroPnp
 
     internal HidMaestroPnpNode[] Capture() => Owned(_probe());
 
-    internal void Wait(bool removal, Action<object> record)
+    internal void Wait(bool removal)
     {
         long start = _now();
-        string? previous = null;
         while (true)
         {
             var nodes = Owned(_probe());
             bool ready = removal ? nodes.Length == 0 :
                 nodes.Any(n => n.Id.Equals(RootId, StringComparison.OrdinalIgnoreCase)) &&
                 nodes.All(n => n.Started && n.Problem == 0) && nodes.Any(n => n.HidInterface);
-            string signature = string.Join("|", nodes.Select(n => $"{n.Id}:{n.Started}:{n.Problem}:{n.HidInterface}"));
             long elapsed = _now() - start;
-            if (previous != signature || ready || elapsed >= 5000)
-                record(new { removal, elapsedMs = elapsed, ready, nodes });
-            previous = signature;
             if (ready) return;
             if (elapsed >= 5000)
             {

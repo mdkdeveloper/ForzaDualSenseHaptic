@@ -41,7 +41,6 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     private string? _xboxOperationError;
     private bool _suppressEmulationChange;
     private bool _suppressBackendChange;
-    private bool _suppressDiagnosticsChange;
     private bool _suppressProfileChange;
     private bool _disposed;
 
@@ -82,17 +81,9 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private int _selectedXboxBackendIndex;
 
-    [ObservableProperty]
-    private bool _impulseDiagnosticsEnabled;
-
-    [ObservableProperty]
-    private string? _diagnosticsError;
-
     public IReadOnlyList<string> XboxBackends { get; } = new[] { "Xbox 360 — ViGEm", "Xbox Series — HIDMaestro" };
     public bool CanChangeXboxBackend => CanChangeXboxEmulation && !IsXboxEmulationEnabled && !IsBusy;
     public bool IsHidMaestroSelected => SelectedXboxBackendIndex == 1;
-    public bool DiagnosticsRestartRequired => _emulation?.DiagnosticsRestartRequired == true;
-    public bool HasDiagnosticsError => !string.IsNullOrWhiteSpace(DiagnosticsError);
     public bool HasXboxError => !string.IsNullOrWhiteSpace(XboxError);
 
     [ObservableProperty]
@@ -184,7 +175,6 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _autoStartXboxEmulation = _profiles.AutoStartXboxEmulation;
         _autoStartListening = _profiles.AutoStartListening;
         _selectedXboxBackendIndex = _profiles.XboxBackend == XboxBackend.HidMaestro ? 1 : 0;
-        _impulseDiagnosticsEnabled = _emulation?.DiagnosticsEnabled == true;
 
         Settings = new SettingsViewModel(_profiles.Current) { IsReadOnly = _profiles.IsReadOnly };
         Settings.Changed += OnSettingChanged;
@@ -272,17 +262,6 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         });
     }
 
-    partial void OnImpulseDiagnosticsEnabledChanged(bool value)
-    {
-        if (_disposed || _emulation is null || _suppressDiagnosticsChange) return;
-        DiagnosticsError = null;
-        try { _emulation.SetDiagnosticsEnabled(value); }
-        catch (Exception exception) { DiagnosticsError = exception.Message; }
-        RefreshXboxStatus();
-    }
-
-    partial void OnDiagnosticsErrorChanged(string? value) => OnPropertyChanged(nameof(HasDiagnosticsError));
-
     [RelayCommand]
     private async Task InstallHidMaestroAsync()
     {
@@ -292,18 +271,6 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
             if (await _dialogs.ConfirmHidMaestroInstallationAsync())
                 await _emulation!.InstallHidMaestroAsync();
         });
-    }
-
-    [RelayCommand]
-    private void OpenDiagnosticsFolder()
-    {
-        if (_emulation is null) return;
-        try
-        {
-            Directory.CreateDirectory(_emulation.DiagnosticsDirectory);
-            _shell.OpenDirectory(_emulation.DiagnosticsDirectory);
-        }
-        catch (Exception exception) { DiagnosticsError = $"Could not open logs: {exception.Message}"; }
     }
 
     partial void OnXboxErrorChanged(string? value) => OnPropertyChanged(nameof(HasXboxError));
@@ -333,13 +300,8 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     {
         if (_emulation is not null)
         {
-            OnPropertyChanged(nameof(DiagnosticsRestartRequired));
             XboxStatus = _emulation.Status;
             XboxError = _emulation.Error ?? _xboxOperationError;
-            if (_emulation.DiagnosticsError is { } diagnosticError) DiagnosticsError = diagnosticError;
-            _suppressDiagnosticsChange = true;
-            try { ImpulseDiagnosticsEnabled = _emulation.DiagnosticsEnabled; }
-            finally { _suppressDiagnosticsChange = false; }
             if (!_emulationOperation)
             {
                 _suppressEmulationChange = true;

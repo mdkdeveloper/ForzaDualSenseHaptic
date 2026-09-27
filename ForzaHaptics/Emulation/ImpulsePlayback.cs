@@ -18,16 +18,6 @@ internal sealed class ImpulsePlayback
             if (elapsed < 0 || Duration <= 0 || period <= 0 || elapsed >= period * (Repeats + 1L)) return 0;
             return elapsed % period < Delay ? 0 : Value;
         }
-
-        public string Phase(long now)
-        {
-            if (Value <= 0) return "explicit-zero";
-            if (!Timed) return "active";
-            long elapsed = now - Start;
-            long period = (long)Duration + Delay;
-            if (Duration <= 0 || period <= 0 || elapsed >= period * (Repeats + 1L)) return "expired";
-            return elapsed < 0 || elapsed % period < Delay ? "scheduled-delay" : "active";
-        }
     }
 
     private Channel? _large, _small, _left, _right;
@@ -70,12 +60,6 @@ internal sealed class ImpulsePlayback
         if (output.Triggers != _written?.Triggers) _lastTriggerWrite = now;
         _written = output;
     }
-
-    public object Describe(long now) => new
-    {
-        large = _large?.Phase(now) ?? "absent", small = _small?.Phase(now) ?? "absent",
-        left = _left?.Phase(now) ?? "absent", right = _right?.Phase(now) ?? "absent"
-    };
 
     public void Reset()
     {

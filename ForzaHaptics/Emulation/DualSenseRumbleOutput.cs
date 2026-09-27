@@ -18,11 +18,9 @@ internal sealed class DualSenseRumbleOutput : IXboxRumbleOutput
     private readonly bool _bluetooth;
     private byte _sequence;
     private bool _disposed;
-    private readonly Action<string, object>? _diagnostic;
 
-    public DualSenseRumbleOutput(ControllerSnapshot snapshot, Action<string, object>? diagnostic = null)
+    public DualSenseRumbleOutput(ControllerSnapshot snapshot)
     {
-        _diagnostic = diagnostic;
         var device = DeviceList.Local.GetHidDevices().FirstOrDefault(d => d.DevicePath == snapshot.DeviceId)
             ?? throw new IOException("The DualSense rumble device is no longer available.");
         if (!device.TryOpen(out HidStream stream)) throw new IOException("Could not open DualSense for Xbox vibration.");
@@ -62,22 +60,7 @@ internal sealed class DualSenseRumbleOutput : IXboxRumbleOutput
     public void Write(byte largeMotor, byte smallMotor, TriggerPair? triggers)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Send(BuildReport(_bluetooth, largeMotor, smallMotor, _sequence++, triggers: triggers), "feedback");
-    }
-
-    private void Send(byte[] report, string reason)
-    {
-        try
-        {
-            _stream.Write(report);
-            _diagnostic?.Invoke("hid_write", new { reason, transport = _bluetooth ? "Bluetooth" : "USB",
-                report = Convert.ToHexString(report), result = "OS write completed; not a controller acknowledgement" });
-        }
-        catch (Exception ex)
-        {
-            _diagnostic?.Invoke("hid_error", new { reason, error = ex.Message });
-            throw;
-        }
+        _stream.Write(BuildReport(_bluetooth, largeMotor, smallMotor, _sequence++, triggers: triggers));
     }
 
     public void Dispose()
@@ -87,8 +70,8 @@ internal sealed class DualSenseRumbleOutput : IXboxRumbleOutput
         try
         {
             // Explicit zero before releasing the rumble mode. Reset cannot race a telemetry writer.
-            try { Send(BuildReport(_bluetooth, 0, 0, _sequence++, triggers: TriggerPair.Off), "release motors and both triggers"); }
-            finally { Send(BuildReport(_bluetooth, 0, 0, _sequence++, restoreAudio: true), "restore audio haptics"); }
+            try { _stream.Write(BuildReport(_bluetooth, 0, 0, _sequence++, triggers: TriggerPair.Off)); }
+            finally { _stream.Write(BuildReport(_bluetooth, 0, 0, _sequence++, restoreAudio: true)); }
         }
         finally { _stream.Dispose(); }
     }

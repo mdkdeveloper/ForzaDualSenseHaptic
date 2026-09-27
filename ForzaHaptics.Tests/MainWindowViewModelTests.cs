@@ -20,15 +20,13 @@ public sealed class MainWindowViewModelTests
         var emulation = new FakeXboxEmulationService
         {
             State = state,
-            StatusOverride = "Waiting for Windows removal (4.2 s)",
-            DiagnosticsRestartRequired = true
+            StatusOverride = "Waiting for Windows removal (4.2 s)"
         };
         using var vm = CreateViewModel(emulation: emulation);
         vm.RefreshStatus();
         Assert.False(vm.CanChangeXboxEmulation);
         Assert.False(vm.CanChangeXboxBackend);
         Assert.Equal(emulation.Status, vm.XboxStatus);
-        Assert.True(vm.DiagnosticsRestartRequired);
         vm.IsXboxEmulationEnabled = true;
         vm.SelectedXboxBackendIndex = 1;
         await vm.CheckXboxDependenciesCommand.ExecuteAsync(null);
@@ -36,10 +34,8 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(0, vm.SelectedXboxBackendIndex);
         Assert.Empty(emulation.Operations);
         emulation.State = XboxEmulationState.Off;
-        emulation.DiagnosticsRestartRequired = false;
         vm.RefreshStatus();
         Assert.True(vm.CanChangeXboxEmulation);
-        Assert.False(vm.DiagnosticsRestartRequired);
     }
 
     [Fact]
@@ -90,10 +86,6 @@ public sealed class MainWindowViewModelTests
         dialogs.ConfirmInstall = true;
         await vm.InstallHidMaestroCommand.ExecuteAsync(null);
         Assert.Equal(1, emulation.InstallCount);
-        vm.ImpulseDiagnosticsEnabled = true;
-        Assert.True(emulation.DiagnosticsEnabled);
-        vm.ImpulseDiagnosticsEnabled = false;
-        Assert.False(emulation.DiagnosticsEnabled);
     }
 
     [Fact]
@@ -613,16 +605,52 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(0, engine.StopCount);
     }
 
-    [Fact]
-    public async Task FailedEngineStartRestoresXboxRumbleOwnership()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedEngineStartRestoresXboxRumbleOwnership(bool throws)
     {
         var operations = new List<string>();
-        var engine = new FakeEngineFacade { Operations = operations, StartSucceeds = false };
+        var engine = new FakeEngineFacade { Operations = operations, StartSucceeds = false, ThrowOnStart = throws };
         var xbox = new FakeXboxEmulationService { Operations = operations };
         using var vm = CreateViewModel(engine: engine, emulation: xbox);
         await vm.InitializeAsync();
         Assert.Equal(new[] { "recover", "haptics:True", "start", "haptics:False" }, operations);
         Assert.False(vm.IsEngineRunning);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task FailedRestartFollowsActualEngineOwnership(bool throws, bool remainsRunning)
+    {
+        var operations = new List<string>();
+        var engine = new FakeEngineFacade { Operations = operations };
+        var xbox = new FakeXboxEmulationService { Operations = operations };
+        using var vm = CreateViewModel(engine: engine, emulation: xbox);
+        await vm.InitializeAsync();
+        Assert.True(vm.IsEngineRunning);
+        operations.Clear();
+        engine.StartSucceeds = false;
+        engine.ThrowOnStart = throws;
+        engine.PreserveRunningOnFailedStart = remainsRunning;
+
+        await vm.RestartOutputCommand.ExecuteAsync(null);
+
+        Assert.Equal(remainsRunning, vm.IsEngineRunning);
+        Assert.False(vm.IsBusy);
+        Assert.Equal(remainsRunning
+            ? new[] { "haptics:True", "start" }
+            : new[] { "haptics:True", "start", "haptics:False" }, operations);
+        if (remainsRunning)
+        {
+            operations.Clear();
+            await vm.StartStopCommand.ExecuteAsync(null);
+            Assert.Equal(new[] { "stop", "haptics:False" }, operations);
+            Assert.False(vm.IsEngineRunning);
+        }
     }
 
     [Fact]
@@ -729,7 +757,9 @@ public sealed class MainWindowViewModelTests
         public float PeakLeft => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.25f;
         public float PeakRight => string.IsNullOrEmpty(OutputDescription) ? 0 : 0.5f;
         public string ActiveEffects => string.Empty;
-        public bool StartSucceeds { get; init; } = true;
+        public bool StartSucceeds { get; set; } = true;
+        public bool ThrowOnStart { get; set; }
+        public bool PreserveRunningOnFailedStart { get; set; }
         public int StartCount { get; private set; }
         public int StopCount { get; private set; }
         public EngineOptions? LastOptions { get; private set; }
@@ -740,8 +770,10 @@ public sealed class MainWindowViewModelTests
             Operations?.Add("start");
             StartCount++;
             LastOptions = options;
-            IsRunning = StartSucceeds;
-            return Task.FromResult(StartSucceeds);
+            IsRunning = StartSucceeds || (PreserveRunningOnFailedStart && IsRunning);
+            return ThrowOnStart
+                ? Task.FromException<bool>(new IOException("Output startup failed"))
+                : Task.FromResult(StartSucceeds);
         }
 
         public Task StopAsync(CancellationToken cancellationToken = default)
@@ -776,19 +808,14 @@ public sealed class MainWindowViewModelTests
         public string? Error => null;
         public XboxEmulationState State { get; set; }
         public bool IsBusy => State is XboxEmulationState.Starting or XboxEmulationState.Stopping;
-        public bool DiagnosticsRestartRequired { get; set; }
         public List<string> Operations { get; init; } = new();
         public Task InitializeCompletion { get; init; } = Task.CompletedTask;
         public Task InitializeAsync() { Operations.Add("recover"); return InitializeCompletion; }
         public Task SetEnabledAsync(bool value) { if (value) BackendAtEnable = Backend; IsEnabled = value; Operations.Add($"xbox:{value}"); return Task.CompletedTask; }
         public XboxBackend Backend { get; private set; }
         public XboxBackend BackendAtEnable { get; private set; }
-        public bool DiagnosticsEnabled { get; private set; }
-        public string? DiagnosticsError => null;
-        public string DiagnosticsDirectory => Path.GetTempPath();
         public int InstallCount { get; private set; }
         public Task SetBackendAsync(XboxBackend backend) { Backend = backend; return Task.CompletedTask; }
-        public void SetDiagnosticsEnabled(bool enabled) => DiagnosticsEnabled = enabled;
         public Task InstallHidMaestroAsync() { InstallCount++; return Task.CompletedTask; }
         public Task CheckAgainAsync() { Operations.Add("xbox:retry"); return Task.CompletedTask; }
         public bool ThrowOnPriority { get; set; }

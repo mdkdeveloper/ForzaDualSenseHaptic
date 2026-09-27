@@ -33,7 +33,7 @@ public sealed class HidMaestroPnpTests
             100 => [Root(), Child(hid: false)],
             _ => [Root(), Child()]
         }, ms => now += ms, () => now);
-        pnp.Wait(false, _ => { });
+        pnp.Wait(false);
         Assert.Equal(150, now);
     }
 
@@ -45,7 +45,7 @@ public sealed class HidMaestroPnpTests
     {
         long now = 0;
         var pnp = new HidMaestroPnp(() => [Root(), Child(started, problem, hid)], ms => now += ms, () => now);
-        Assert.Throws<InvalidOperationException>(() => pnp.Wait(false, _ => { }));
+        Assert.Throws<InvalidOperationException>(() => pnp.Wait(false));
         Assert.Equal(5000, now);
     }
 
@@ -59,7 +59,22 @@ public sealed class HidMaestroPnpTests
             50 => [Child() with { ParentId = null }],
             _ => []
         }, ms => now += ms, () => now);
-        pnp.Wait(true, _ => { });
+        pnp.Wait(true);
+        Assert.Equal(100, now);
+    }
+
+    [Fact]
+    public void CaptureBeforeRemovalRemembersChildrenWhoseParentDisappearsBeforeWait()
+    {
+        long now = 0;
+        bool removing = false;
+        var pnp = new HidMaestroPnp(() => !removing ? [Root(), Child()] :
+            now < 100 ? [Child() with { ParentId = null }] : [], ms => now += ms, () => now);
+        pnp.Capture();
+        removing = true;
+
+        pnp.Wait(true);
+
         Assert.Equal(100, now);
     }
 
@@ -69,9 +84,9 @@ public sealed class HidMaestroPnpTests
         long now = 0;
         bool present = true;
         var pnp = new HidMaestroPnp(() => present ? [Root(), Child()] : [], ms => now += ms, () => now);
-        Assert.Throws<VirtualXboxRemovalPendingException>(() => pnp.Wait(true, _ => { }));
+        Assert.Throws<VirtualXboxRemovalPendingException>(() => pnp.Wait(true));
         present = false;
-        pnp.Wait(true, _ => { });
+        pnp.Wait(true);
         Assert.Equal(5000, now);
     }
 
@@ -81,9 +96,9 @@ public sealed class HidMaestroPnpTests
         long now = 0;
         var foreign = new HidMaestroPnpNode("SWD\\HIDMAESTRO_VID_045E_PID_0B13&IG_00\\HM_OTHER", null, true, 0, true);
         var pnp = new HidMaestroPnp(() => [foreign], ms => now += ms, () => now);
-        pnp.Wait(true, _ => { });
+        pnp.Wait(true);
         Assert.Equal(0, now);
-        Assert.Throws<InvalidOperationException>(() => pnp.Wait(false, _ => { }));
+        Assert.Throws<InvalidOperationException>(() => pnp.Wait(false));
     }
 
     [Fact]
