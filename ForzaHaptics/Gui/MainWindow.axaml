@@ -87,7 +87,7 @@
             <Border BorderBrush="{StaticResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="0,8,0,0">
                 <StackPanel Spacing="5">
                     <WrapPanel>
-                        <ToggleButton x:Name="XboxEmulationToggle" Content="Xbox 360 emulation"
+                        <ToggleButton x:Name="XboxEmulationToggle" Content="Xbox emulation"
                                       IsChecked="{Binding IsXboxEmulationEnabled, Mode=TwoWay}"
                                       IsEnabled="{Binding CanChangeXboxEmulation}" Margin="0,0,12,0" />
                         <TextBlock Text="{Binding XboxStatus}" VerticalAlignment="Center" Margin="0,0,16,0" />
@@ -95,6 +95,26 @@
                                   IsChecked="{Binding AutoStartXboxEmulation, Mode=TwoWay}"
                                   ToolTip.Tip="Applies to the next app launch, independently of telemetry and profiles." />
                     </WrapPanel>
+                    <WrapPanel>
+                        <ComboBox x:Name="XboxBackendSelector" ItemsSource="{Binding XboxBackends}"
+                                  SelectedIndex="{Binding SelectedXboxBackendIndex, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanChangeXboxBackend}" MinWidth="240" Margin="0,0,12,0"
+                                  ToolTip.Tip="Stop emulation before changing the virtual controller backend." />
+                        <Button Content="Install / repair HIDMaestro" Command="{Binding InstallHidMaestroCommand}"
+                                IsVisible="{Binding IsHidMaestroSelected}" IsEnabled="{Binding CanChangeXboxBackend}" />
+                    </WrapPanel>
+                    <TextBlock IsVisible="{Binding IsHidMaestroSelected}" TextWrapping="Wrap"
+                               Text="HIDMaestro requires running ForzaHaptics as administrator. Xbox Series uses the xbox-series-xs-bt virtual profile; your DualSense can use USB or Bluetooth." />
+                    <WrapPanel>
+                        <CheckBox x:Name="ImpulseDiagnosticsCheckBox" Content="Record Impulse Triggers diagnostics"
+                                  IsChecked="{Binding ImpulseDiagnosticsEnabled, Mode=TwoWay}" Margin="0,0,12,0" />
+                        <Button Content="Open logs" Command="{Binding OpenDiagnosticsFolderCommand}" />
+                    </WrapPanel>
+                    <TextBlock IsVisible="{Binding DiagnosticsRestartRequired}" TextWrapping="Wrap"
+                               Foreground="{StaticResource AppWarningBrush}"
+                               Text="Full HIDMaestro SDK diagnostics require restarting ForzaHaptics. In the new process, enable recording before emulation or driver installation. Current session logging remains available." />
+                    <TextBlock Text="{Binding DiagnosticsError}" IsVisible="{Binding HasDiagnosticsError}"
+                               TextWrapping="Wrap" Foreground="{StaticResource AppWarningBrush}" />
                     <StackPanel IsVisible="{Binding HasXboxError}" Spacing="5">
                         <TextBlock Text="{Binding XboxError}" TextWrapping="Wrap" Foreground="{StaticResource AppWarningBrush}" />
                         <WrapPanel>

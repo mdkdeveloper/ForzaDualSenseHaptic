@@ -1,3 +1,4 @@
+using ForzaHaptics.Emulation;
 using ForzaHaptics.Gui.Services;
 
 namespace ForzaHaptics.Tests;
@@ -18,6 +19,26 @@ public sealed class ProfileStoreTests
 
         Assert.True(store.AutoStartListening);
         Assert.False(store.AutoStartXboxEmulation);
+        Assert.Equal(XboxBackend.ViGEm, store.XboxBackend);
+    }
+
+    [Fact]
+    public void BackendPersistsIndependentlyOfProfilesAndOtherPreferences()
+    {
+        using var folder = new ProfileTestDirectory();
+        var store = ProfileStore.Open(folder.Path);
+        using var session = new ProfileSession(store, store.OpenProfile("Default"), "Default");
+        session.XboxBackend = XboxBackend.HidMaestro;
+        session.AutoStartXboxEmulation = true;
+        session.AutoStartListening = false;
+        session.SwitchTo("profile_1");
+        session.SwitchTo("Default");
+        var reopened = ProfileStore.Open(folder.Path);
+        Assert.Equal(XboxBackend.HidMaestro, reopened.XboxBackend);
+        Assert.True(reopened.AutoStartXboxEmulation);
+        Assert.False(reopened.AutoStartListening);
+        reopened.XboxBackend = XboxBackend.ViGEm;
+        Assert.Equal(XboxBackend.ViGEm, ProfileStore.Open(folder.Path).XboxBackend);
     }
 
     [Fact]

@@ -50,6 +50,16 @@ public sealed class AvaloniaUserDialogService : IUserDialogService
         return await ShowAsync<MessageDialogResult>(dialog, cancellationToken) == MessageDialogResult.Primary;
     }
 
+    public async Task<bool> ConfirmHidMaestroInstallationAsync(CancellationToken cancellationToken = default)
+    {
+        var dialog = new MessageDialog("Install / repair HIDMaestro",
+            "This installs or repairs the HIDMaestro 1.9.0 user-mode virtual controller driver and its local trusted certificate. " +
+            "Run ForzaHaptics as administrator. Close PadForge and other HIDMaestro applications first; installation is blocked while their virtual devices are active. " +
+            "The driver is not installed automatically when emulation starts.",
+            "Install / repair", cancelText: "Cancel");
+        return await ShowAsync<MessageDialogResult>(dialog, cancellationToken) == MessageDialogResult.Primary;
+    }
+
     public async Task ShowWarningAsync(string message, CancellationToken cancellationToken = default) =>
         await ShowAsync<MessageDialogResult>(new MessageDialog("ForzaHaptics — Warning", message, "OK"), cancellationToken);
 

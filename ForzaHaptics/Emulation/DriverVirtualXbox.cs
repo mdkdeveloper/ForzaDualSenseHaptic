@@ -13,7 +13,7 @@ public interface IVirtualXboxFactory
 
 public interface IVirtualXbox : IDisposable
 {
-    event Action<byte, byte>? RumbleReceived;
+    event Action<XboxFeedback>? FeedbackReceived;
     void Submit(ControllerInputState state);
 }
 
@@ -47,7 +47,7 @@ public sealed class VirtualXboxFactory : IVirtualXboxFactory
     {
         private readonly ViGEmClient _client;
         private readonly IXbox360Controller _controller;
-        public event Action<byte, byte>? RumbleReceived;
+        public event Action<XboxFeedback>? FeedbackReceived;
         private bool _disposed;
 
         public VirtualXbox(ViGEmClient client)
@@ -69,7 +69,7 @@ public sealed class VirtualXboxFactory : IVirtualXboxFactory
         }
 
         private void OnFeedback(object sender, Xbox360FeedbackReceivedEventArgs e)
-            => RumbleReceived?.Invoke(e.LargeMotor, e.SmallMotor);
+            => FeedbackReceived?.Invoke(XboxFeedback.FromViGEm(e.LargeMotor, e.SmallMotor));
 
         public void Submit(ControllerInputState state)
         {

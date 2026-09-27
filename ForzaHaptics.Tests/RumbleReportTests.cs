@@ -1,11 +1,36 @@
 using System.Buffers.Binary;
 using ForzaHaptics.Controllers;
 using ForzaHaptics.Emulation;
+using ForzaHaptics.Triggers;
 
 namespace ForzaHaptics.Tests;
 
 public sealed class RumbleReportTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CombinedImpulseReportCarriesIndependentEffectsAndExplicitRelease(bool bluetooth)
+    {
+        var pair = new TriggerPair(TriggerEffect.Vibration(15, 2), TriggerEffect.Vibration(15, 7));
+        var report = DualSenseRumbleOutput.BuildReport(bluetooth, 254, 128, 7, triggers: pair);
+        int common = bluetooth ? 3 : 1;
+        Assert.Equal(0x0f, report[common]);
+        Assert.Equal(64, report[common + 2]);
+        Assert.Equal(127, report[common + 3]);
+        byte[] expected = new byte[11];
+        pair.R2.WriteTo(expected);
+        Assert.Equal(expected, report[(common + 10)..(common + 21)]);
+        pair.L2.WriteTo(expected);
+        Assert.Equal(expected, report[(common + 21)..(common + 32)]);
+        if (bluetooth) AssertCrc(report);
+        var stop = DualSenseRumbleOutput.BuildReport(bluetooth, 0, 0, triggers: TriggerPair.Off);
+        Assert.Equal(0x0f, stop[common]);
+        Assert.Equal(TriggerEffect.ModeOff, stop[common + 10]);
+        Assert.Equal(TriggerEffect.ModeOff, stop[common + 21]);
+        if (bluetooth) AssertCrc(stop);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

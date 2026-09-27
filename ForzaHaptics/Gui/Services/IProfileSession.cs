@@ -1,3 +1,5 @@
+using ForzaHaptics.Emulation;
+
 namespace ForzaHaptics.Gui.Services;
 
 /// <summary>Coordinates profile files and the live configuration independently from the desktop UI.</summary>
@@ -7,6 +9,7 @@ public interface IProfileSession : IDisposable
     string ActiveProfile { get; }
     bool AutoStartListening { get; set; }
     bool AutoStartXboxEmulation { get; set; }
+    XboxBackend XboxBackend { get => XboxBackend.ViGEm; set { } }
     bool IsReadOnly => ProfileStore.IsDefault(ActiveProfile);
     string ProfileDirectory { get; }
     AppConfig Current { get; }
@@ -53,6 +56,11 @@ public sealed class ProfileSession : IProfileSession
     {
         get => _store.AutoStartXboxEmulation;
         set => _store.AutoStartXboxEmulation = value;
+    }
+    public XboxBackend XboxBackend
+    {
+        get => _store.XboxBackend;
+        set => _store.XboxBackend = value;
     }
     public string ProfileDirectory => _store.Directory;
     public AppConfig Current => _config.Current;

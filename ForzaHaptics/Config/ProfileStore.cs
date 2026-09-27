@@ -1,3 +1,4 @@
+using ForzaHaptics.Emulation;
 using System.Text.Json;
 using ForzaHaptics.Util;
 
@@ -117,6 +118,19 @@ public sealed class ProfileStore
         set => UpdateSettings(settings => settings.AutoStartXboxEmulation = value, "Xbox emulation auto-start preference");
     }
 
+    public XboxBackend XboxBackend
+    {
+        get
+        {
+            lock (_settingsGate)
+            {
+                var backend = LoadSettings().XboxBackend;
+                return Enum.IsDefined(backend) ? backend : Emulation.XboxBackend.ViGEm;
+            }
+        }
+        set => UpdateSettings(settings => settings.XboxBackend = value, "Xbox emulation backend");
+    }
+
     public void SaveActive(string name) => UpdateSettings(settings => settings.ActiveProfile = name, "active profile");
 
     private void UpdateSettings(Action<Settings> update, string description)
@@ -233,6 +247,7 @@ public sealed class ProfileStore
     private sealed class Settings
     {
         public string? ActiveProfile { get; set; }
+        public XboxBackend XboxBackend { get; set; } = Emulation.XboxBackend.ViGEm;
         public bool AutoStartListening { get; set; } = true;
         public bool AutoStartXboxEmulation { get; set; }
     }

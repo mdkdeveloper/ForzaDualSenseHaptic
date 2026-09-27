@@ -24,6 +24,8 @@ public interface IUserDialogService
         string profileName,
         CancellationToken cancellationToken = default);
 
+    Task<bool> ConfirmHidMaestroInstallationAsync(CancellationToken cancellationToken = default) => Task.FromResult(false);
+
     Task ShowWarningAsync(string message, CancellationToken cancellationToken = default);
     Task ShowErrorAsync(string message, CancellationToken cancellationToken = default);
 }

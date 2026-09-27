@@ -12,6 +12,90 @@ namespace ForzaHaptics.Tests;
 
 public sealed class MainWindowViewModelTests
 {
+    [Theory]
+    [InlineData(XboxEmulationState.Starting)]
+    [InlineData(XboxEmulationState.Stopping)]
+    public async Task TransitionBlocksToggleBackendAndRetryAndDisplaysProgress(XboxEmulationState state)
+    {
+        var emulation = new FakeXboxEmulationService
+        {
+            State = state,
+            StatusOverride = "Waiting for Windows removal (4.2 s)",
+            DiagnosticsRestartRequired = true
+        };
+        using var vm = CreateViewModel(emulation: emulation);
+        vm.RefreshStatus();
+        Assert.False(vm.CanChangeXboxEmulation);
+        Assert.False(vm.CanChangeXboxBackend);
+        Assert.Equal(emulation.Status, vm.XboxStatus);
+        Assert.True(vm.DiagnosticsRestartRequired);
+        vm.IsXboxEmulationEnabled = true;
+        vm.SelectedXboxBackendIndex = 1;
+        await vm.CheckXboxDependenciesCommand.ExecuteAsync(null);
+        Assert.False(vm.IsXboxEmulationEnabled);
+        Assert.Equal(0, vm.SelectedXboxBackendIndex);
+        Assert.Empty(emulation.Operations);
+        emulation.State = XboxEmulationState.Off;
+        emulation.DiagnosticsRestartRequired = false;
+        vm.RefreshStatus();
+        Assert.True(vm.CanChangeXboxEmulation);
+        Assert.False(vm.DiagnosticsRestartRequired);
+    }
+
+    [Fact]
+    public async Task BackendRestoredBeforeAutoStartAndCannotChangeWhileEnabled()
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = false, AutoStartXboxEmulation = true, XboxBackend = XboxBackend.HidMaestro };
+        var emulation = new FakeXboxEmulationService();
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation);
+        Assert.Equal(1, vm.SelectedXboxBackendIndex);
+        await vm.InitializeAsync();
+        Assert.Equal(XboxBackend.HidMaestro, emulation.Backend);
+        Assert.True(emulation.IsEnabled);
+        Assert.Equal(XboxBackend.HidMaestro, emulation.BackendAtEnable);
+        Assert.False(vm.CanChangeXboxBackend);
+        vm.SelectedXboxBackendIndex = 0;
+        Assert.Equal(1, vm.SelectedXboxBackendIndex);
+        Assert.Equal(XboxBackend.HidMaestro, profiles.XboxBackend);
+    }
+
+    [Fact]
+    public async Task BackendCannotChangeDuringInitialization()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var profiles = new FakeProfileSession { AutoStartListening = false };
+        var emulation = new FakeXboxEmulationService { InitializeCompletion = completion.Task };
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation);
+        Task initialization = vm.InitializeAsync();
+        Assert.False(vm.CanChangeXboxBackend);
+        vm.SelectedXboxBackendIndex = 1;
+        Assert.Equal(0, vm.SelectedXboxBackendIndex);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        completion.SetResult();
+        await initialization;
+        Assert.True(vm.CanChangeXboxBackend);
+    }
+
+    [Fact]
+    public async Task BackendSelectionPersistsAndInstallationRequiresConfirmation()
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = false };
+        var emulation = new FakeXboxEmulationService();
+        var dialogs = new FakeDialogService();
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation, dialogs: dialogs);
+        vm.SelectedXboxBackendIndex = 1;
+        Assert.Equal(XboxBackend.HidMaestro, profiles.XboxBackend);
+        await vm.InstallHidMaestroCommand.ExecuteAsync(null);
+        Assert.Equal(0, emulation.InstallCount);
+        dialogs.ConfirmInstall = true;
+        await vm.InstallHidMaestroCommand.ExecuteAsync(null);
+        Assert.Equal(1, emulation.InstallCount);
+        vm.ImpulseDiagnosticsEnabled = true;
+        Assert.True(emulation.DiagnosticsEnabled);
+        vm.ImpulseDiagnosticsEnabled = false;
+        Assert.False(emulation.DiagnosticsEnabled);
+    }
+
     [Fact]
     public async Task DefaultCannotBeEditedSavedRenamedOrDeletedButCanBeCopied()
     {
@@ -600,6 +684,7 @@ public sealed class MainWindowViewModelTests
         public bool IsReadOnly => ActiveProfile == "Default";
         public bool AutoStartListening { get; set; } = true;
         public bool AutoStartXboxEmulation { get; set; }
+        public XboxBackend XboxBackend { get; set; }
         public string ProfileDirectory => "C:\\Profiles";
         public AppConfig Current { get; private set; } = new();
         public int SaveCount { get; private set; }
@@ -686,14 +771,26 @@ public sealed class MainWindowViewModelTests
     private sealed class FakeXboxEmulationService : IXboxEmulationService
     {
         public bool IsEnabled { get; private set; }
-        public string Status => IsEnabled ? "Connected" : "Disabled";
+        public string? StatusOverride { get; set; }
+        public string Status => StatusOverride ?? (IsEnabled ? "Connected" : "Disabled");
         public string? Error => null;
-        public bool IsBusy => false;
+        public XboxEmulationState State { get; set; }
+        public bool IsBusy => State is XboxEmulationState.Starting or XboxEmulationState.Stopping;
+        public bool DiagnosticsRestartRequired { get; set; }
         public List<string> Operations { get; init; } = new();
         public Task InitializeCompletion { get; init; } = Task.CompletedTask;
         public Task InitializeAsync() { Operations.Add("recover"); return InitializeCompletion; }
-        public Task SetEnabledAsync(bool value) { IsEnabled = value; Operations.Add($"xbox:{value}"); return Task.CompletedTask; }
-        public Task CheckAgainAsync() => Task.CompletedTask;
+        public Task SetEnabledAsync(bool value) { if (value) BackendAtEnable = Backend; IsEnabled = value; Operations.Add($"xbox:{value}"); return Task.CompletedTask; }
+        public XboxBackend Backend { get; private set; }
+        public XboxBackend BackendAtEnable { get; private set; }
+        public bool DiagnosticsEnabled { get; private set; }
+        public string? DiagnosticsError => null;
+        public string DiagnosticsDirectory => Path.GetTempPath();
+        public int InstallCount { get; private set; }
+        public Task SetBackendAsync(XboxBackend backend) { Backend = backend; return Task.CompletedTask; }
+        public void SetDiagnosticsEnabled(bool enabled) => DiagnosticsEnabled = enabled;
+        public Task InstallHidMaestroAsync() { InstallCount++; return Task.CompletedTask; }
+        public Task CheckAgainAsync() { Operations.Add("xbox:retry"); return Task.CompletedTask; }
         public bool ThrowOnPriority { get; set; }
         public void SetHapticsActive(bool value)
         {
@@ -708,6 +805,8 @@ public sealed class MainWindowViewModelTests
     private sealed class FakeDialogService : IUserDialogService
     {
         public List<string> Errors { get; } = new();
+        public bool ConfirmInstall { get; set; }
+        public Task<bool> ConfirmHidMaestroInstallationAsync(CancellationToken cancellationToken = default) => Task.FromResult(ConfirmInstall);
         public UnsavedChangesDecision UnsavedDecision { get; set; } = UnsavedChangesDecision.Save;
 
         public Task<string?> RequestTextAsync(string title, string prompt, string initialValue, CancellationToken cancellationToken = default) =>
