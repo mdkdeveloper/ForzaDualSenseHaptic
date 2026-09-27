@@ -14,6 +14,26 @@ namespace ForzaHaptics.Tests;
 public sealed class AvaloniaSmokeTests
 {
     [AvaloniaFact]
+    public async Task ClosingAdministratorRestartDialogCancelsInsteadOfAccepting()
+    {
+        var owner = new Window();
+        var dialog = new MessageDialog("Administrator permissions", "Restart to enable Impulse Triggers?",
+            "Restart as administrator", cancelText: "Cancel");
+        owner.Show();
+        try
+        {
+            Task<MessageDialogResult> result = dialog.ShowDialog<MessageDialogResult>(owner);
+            dialog.Close();
+            Assert.Equal(MessageDialogResult.Cancel, await result);
+        }
+        finally
+        {
+            dialog.Close();
+            owner.Close();
+        }
+    }
+
+    [AvaloniaFact]
     public void ApplicationUsesDarkThemeAndReadableSemanticPalette()
     {
         var application = Assert.IsType<App>(Application.Current);
@@ -132,6 +152,9 @@ public sealed class AvaloniaSmokeTests
                 var battery = NamedControl<Control>(mainWindow, "ControllerBattery");
                 var disconnect = NamedControl<Button>(mainWindow, "DisconnectControllerButton");
                 var profileSelector = NamedControl<ComboBox>(mainWindow, "ProfileSelector");
+                var impulseTriggers = NamedControl<CheckBox>(mainWindow, "ImpulseTriggersCheckBox");
+                Assert.Equal("Impulse Triggers", impulseTriggers.Content);
+                AssertHorizontallyInside(mainWindow, impulseTriggers);
                 AssertHorizontallyInside(mainWindow, controllerPanel);
                 AssertHorizontallyInside(mainWindow, battery);
                 AssertHorizontallyInside(mainWindow, disconnect);

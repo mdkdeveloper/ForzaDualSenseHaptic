@@ -77,13 +77,14 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string? _xboxError;
 
-    public bool CanChangeXboxEmulation => _emulation is not null && !_emulationOperation && !_emulation.IsBusy && !IsDisconnecting;
+    public bool CanChangeXboxEmulation => _emulation is not null && !_restartRequested && !_emulationOperation && !_emulation.IsBusy && !IsDisconnecting;
     [ObservableProperty]
-    private int _selectedXboxBackendIndex;
+    private bool _isImpulseTriggersEnabled;
 
-    public IReadOnlyList<string> XboxBackends { get; } = new[] { "Xbox 360 — ViGEm", "Xbox Series — HIDMaestro" };
+    public event EventHandler? RestartRequested;
+    private bool _restartRequested;
     public bool CanChangeXboxBackend => CanChangeXboxEmulation && !IsXboxEmulationEnabled && !IsBusy;
-    public bool IsHidMaestroSelected => SelectedXboxBackendIndex == 1;
+    public bool IsHidMaestroSelected => IsImpulseTriggersEnabled;
     public bool HasXboxError => !string.IsNullOrWhiteSpace(XboxError);
 
     [ObservableProperty]
@@ -174,7 +175,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _emulation = emulation;
         _autoStartXboxEmulation = _profiles.AutoStartXboxEmulation;
         _autoStartListening = _profiles.AutoStartListening;
-        _selectedXboxBackendIndex = _profiles.XboxBackend == XboxBackend.HidMaestro ? 1 : 0;
+        _isImpulseTriggersEnabled = _profiles.XboxBackend == XboxBackend.HidMaestro;
 
         Settings = new SettingsViewModel(_profiles.Current) { IsReadOnly = _profiles.IsReadOnly };
         Settings.Changed += OnSettingChanged;
@@ -207,13 +208,20 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         {
             await RunEmulationAsync(async () =>
             {
-                await _emulation.SetBackendAsync(_profiles.XboxBackend);
+                if (IsImpulseTriggersEnabled && !_shell.IsAdministrator)
+                {
+                    if (await TryRestartAsAdministratorAsync()) return;
+                    await ApplyImpulseBackendAsync(false);
+                }
+                else
+                    await ApplyImpulseBackendAsync(IsImpulseTriggersEnabled);
+                if (_disposed || _restartRequested) return;
                 await _emulation.InitializeAsync();
                 if (!_disposed && AutoStartXboxEmulation)
                     await _emulation.SetEnabledAsync(true);
             });
         }
-        if (!_disposed && AutoStartListening)
+        if (!_disposed && !_restartRequested && AutoStartListening)
             await StartEngineAsync();
     }
 
@@ -234,32 +242,76 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         _ = RunEmulationAsync(() => _emulation.SetEnabledAsync(value));
     }
 
-    partial void OnSelectedXboxBackendIndexChanged(int oldValue, int newValue)
+    partial void OnIsImpulseTriggersEnabledChanged(bool oldValue, bool newValue)
     {
         if (_suppressBackendChange) return;
-        if (!CanChangeXboxBackend || newValue is < 0 or > 1)
+        if (!CanChangeXboxBackend)
         {
-            _suppressBackendChange = true;
-            try { SelectedXboxBackendIndex = oldValue; }
-            finally { _suppressBackendChange = false; }
+            SetImpulseCheckbox(oldValue);
             return;
         }
         OnPropertyChanged(nameof(IsHidMaestroSelected));
         _ = RunEmulationAsync(async () =>
         {
+            if (newValue && !_shell.IsAdministrator)
+            {
+                if (await TryRestartAsAdministratorAsync()) return;
+                await ApplyImpulseBackendAsync(false);
+            }
+            else
+                await ApplyImpulseBackendAsync(newValue);
+        });
+    }
+
+    private void SetImpulseCheckbox(bool value)
+    {
+        _suppressBackendChange = true;
+        try { IsImpulseTriggersEnabled = value; }
+        finally { _suppressBackendChange = false; }
+        OnPropertyChanged(nameof(IsHidMaestroSelected));
+    }
+
+    private async Task ApplyImpulseBackendAsync(bool enabled)
+    {
+        try
+        {
+            await _emulation!.SetBackendAsync(enabled ? XboxBackend.HidMaestro : XboxBackend.ViGEm);
+            _profiles.XboxBackend = _emulation.Backend;
+        }
+        finally
+        {
+            SetImpulseCheckbox(_emulation!.Backend == XboxBackend.HidMaestro);
+        }
+    }
+
+    private async Task<bool> TryRestartAsAdministratorAsync()
+    {
+        SetImpulseCheckbox(false);
+        try
+        {
+            if (!await _dialogs.ConfirmAdministratorRestartAsync() || !await ConfirmLeaveAsync())
+                return false;
+            bool wasReadOnly = Settings.IsReadOnly;
+            IsBusy = true;
+            Settings.IsReadOnly = true;
             try
             {
-                await _emulation!.SetBackendAsync(newValue == 1 ? XboxBackend.HidMaestro : XboxBackend.ViGEm);
-                _profiles.XboxBackend = _emulation.Backend;
+                if (!await _shell.RestartAsAdministratorAsync()) return false;
             }
             finally
             {
-                _suppressBackendChange = true;
-                try { SelectedXboxBackendIndex = _emulation!.Backend == XboxBackend.HidMaestro ? 1 : 0; }
-                finally { _suppressBackendChange = false; }
-                OnPropertyChanged(nameof(IsHidMaestroSelected));
+                Settings.IsReadOnly = wasReadOnly;
+                IsBusy = false;
             }
-        });
+            _restartRequested = true;
+            RestartRequested?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            await _dialogs.ShowErrorAsync($"Could not restart as administrator: {exception.Message}");
+            return false;
+        }
     }
 
     [RelayCommand]
@@ -406,7 +458,7 @@ public partial class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    public async Task<bool> ConfirmCloseAsync() => await ConfirmLeaveAsync();
+    public async Task<bool> ConfirmCloseAsync() => !_emulationOperation && await ConfirmLeaveAsync();
 
     partial void OnSelectedProfileChanged(string? oldValue, string? newValue)
     {

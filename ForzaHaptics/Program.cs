@@ -94,7 +94,7 @@ internal static class Program
     private static int Main(string[] args)
     {
         // No options: open the window.
-        if (args.Length == 0) return Gui.GuiApp.Run(args);
+        if (args.Length == 0 || Gui.Services.ElevatedRestart.IsRestartInvocation(args)) return Gui.GuiApp.Run(args);
 
         ConsoleHost.Attach();
 

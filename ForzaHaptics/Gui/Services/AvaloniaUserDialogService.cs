@@ -60,6 +60,14 @@ public sealed class AvaloniaUserDialogService : IUserDialogService
         return await ShowAsync<MessageDialogResult>(dialog, cancellationToken) == MessageDialogResult.Primary;
     }
 
+    public async Task<bool> ConfirmAdministratorRestartAsync(CancellationToken cancellationToken = default)
+    {
+        var dialog = new MessageDialog("Impulse Triggers",
+            "Impulse Triggers requires HIDMaestro and administrator rights. Restart ForzaHaptics as administrator to enable it.",
+            "Restart as administrator", cancelText: "Cancel");
+        return await ShowAsync<MessageDialogResult>(dialog, cancellationToken) == MessageDialogResult.Primary;
+    }
+
     public async Task ShowWarningAsync(string message, CancellationToken cancellationToken = default) =>
         await ShowAsync<MessageDialogResult>(new MessageDialog("ForzaHaptics — Warning", message, "OK"), cancellationToken);
 

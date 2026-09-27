@@ -28,10 +28,10 @@ public sealed class MainWindowViewModelTests
         Assert.False(vm.CanChangeXboxBackend);
         Assert.Equal(emulation.Status, vm.XboxStatus);
         vm.IsXboxEmulationEnabled = true;
-        vm.SelectedXboxBackendIndex = 1;
+        vm.IsImpulseTriggersEnabled = true;
         await vm.CheckXboxDependenciesCommand.ExecuteAsync(null);
         Assert.False(vm.IsXboxEmulationEnabled);
-        Assert.Equal(0, vm.SelectedXboxBackendIndex);
+        Assert.False(vm.IsImpulseTriggersEnabled);
         Assert.Empty(emulation.Operations);
         emulation.State = XboxEmulationState.Off;
         vm.RefreshStatus();
@@ -44,14 +44,14 @@ public sealed class MainWindowViewModelTests
         var profiles = new FakeProfileSession { AutoStartListening = false, AutoStartXboxEmulation = true, XboxBackend = XboxBackend.HidMaestro };
         var emulation = new FakeXboxEmulationService();
         using var vm = CreateViewModel(profiles: profiles, emulation: emulation);
-        Assert.Equal(1, vm.SelectedXboxBackendIndex);
+        Assert.True(vm.IsImpulseTriggersEnabled);
         await vm.InitializeAsync();
         Assert.Equal(XboxBackend.HidMaestro, emulation.Backend);
         Assert.True(emulation.IsEnabled);
         Assert.Equal(XboxBackend.HidMaestro, emulation.BackendAtEnable);
         Assert.False(vm.CanChangeXboxBackend);
-        vm.SelectedXboxBackendIndex = 0;
-        Assert.Equal(1, vm.SelectedXboxBackendIndex);
+        vm.IsImpulseTriggersEnabled = false;
+        Assert.True(vm.IsImpulseTriggersEnabled);
         Assert.Equal(XboxBackend.HidMaestro, profiles.XboxBackend);
     }
 
@@ -64,8 +64,8 @@ public sealed class MainWindowViewModelTests
         using var vm = CreateViewModel(profiles: profiles, emulation: emulation);
         Task initialization = vm.InitializeAsync();
         Assert.False(vm.CanChangeXboxBackend);
-        vm.SelectedXboxBackendIndex = 1;
-        Assert.Equal(0, vm.SelectedXboxBackendIndex);
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.False(vm.IsImpulseTriggersEnabled);
         Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
         completion.SetResult();
         await initialization;
@@ -79,13 +79,155 @@ public sealed class MainWindowViewModelTests
         var emulation = new FakeXboxEmulationService();
         var dialogs = new FakeDialogService();
         using var vm = CreateViewModel(profiles: profiles, emulation: emulation, dialogs: dialogs);
-        vm.SelectedXboxBackendIndex = 1;
+        vm.IsImpulseTriggersEnabled = true;
         Assert.Equal(XboxBackend.HidMaestro, profiles.XboxBackend);
         await vm.InstallHidMaestroCommand.ExecuteAsync(null);
         Assert.Equal(0, emulation.InstallCount);
         dialogs.ConfirmInstall = true;
         await vm.InstallHidMaestroCommand.ExecuteAsync(null);
         Assert.Equal(1, emulation.InstallCount);
+    }
+
+    [Fact]
+    public async Task SavedImpulseTriggersPromptBeforeEitherAutostartAndCancelFallsBack()
+    {
+        var confirmation = new TaskCompletionSource<bool>();
+        var profiles = new FakeProfileSession { AutoStartListening = true, AutoStartXboxEmulation = true, XboxBackend = XboxBackend.HidMaestro };
+        var emulation = new FakeXboxEmulationService();
+        var engine = new FakeEngineFacade();
+        var dialogs = new FakeDialogService { RestartConfirmation = confirmation.Task };
+        var shell = new FakeShellService { IsAdministrator = false };
+        using var vm = CreateViewModel(profiles: profiles, engine: engine, emulation: emulation, dialogs: dialogs, shell: shell);
+        Task initialize = vm.InitializeAsync();
+        Assert.Equal(1, dialogs.RestartPromptCount);
+        Assert.False(vm.CanChangeXboxBackend);
+        Assert.False(emulation.IsEnabled);
+        Assert.Equal(0, engine.StartCount);
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        confirmation.SetResult(false);
+        await initialize;
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        Assert.Equal(XboxBackend.ViGEm, emulation.BackendAtEnable);
+        Assert.True(emulation.IsEnabled);
+        Assert.Equal(1, engine.StartCount);
+        Assert.Equal(0, shell.RestartCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SavedDisabledImpulseTriggersStayDisabledRegardlessOfAdministratorRights(bool administrator)
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = false, XboxBackend = XboxBackend.ViGEm };
+        var emulation = new FakeXboxEmulationService();
+        var dialogs = new FakeDialogService();
+        var shell = new FakeShellService { IsAdministrator = administrator };
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation, dialogs: dialogs, shell: shell);
+        await vm.InitializeAsync();
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        Assert.Equal(XboxBackend.ViGEm, emulation.Backend);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        Assert.Equal(0, dialogs.RestartPromptCount);
+        Assert.Equal(0, shell.RestartCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ManualImpulseTriggersCancellationKeepsApplicationOpenAndPersistsDisabled(bool acceptDialog)
+    {
+        var profiles = new FakeProfileSession();
+        var emulation = new FakeXboxEmulationService();
+        var dialogs = new FakeDialogService { ConfirmRestart = acceptDialog };
+        var shell = new FakeShellService { IsAdministrator = false, RestartSucceeds = false };
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation, dialogs: dialogs, shell: shell);
+        int restartRequests = 0;
+        vm.RestartRequested += (_, _) => restartRequests++;
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        Assert.Equal(XboxBackend.ViGEm, emulation.Backend);
+        Assert.Equal(1, dialogs.RestartPromptCount);
+        Assert.Equal(acceptDialog ? 1 : 0, shell.RestartCount);
+        Assert.Equal(0, restartRequests);
+        Assert.Empty(dialogs.Errors);
+        Assert.True(vm.CanChangeXboxBackend);
+    }
+
+    [Fact]
+    public async Task SavedImpulseTriggersSuccessfulRestartRequestsCloseWithoutAutostart()
+    {
+        var profiles = new FakeProfileSession { AutoStartListening = true, AutoStartXboxEmulation = true, XboxBackend = XboxBackend.HidMaestro };
+        var emulation = new FakeXboxEmulationService();
+        var engine = new FakeEngineFacade();
+        var dialogs = new FakeDialogService { ConfirmRestart = true };
+        var shell = new FakeShellService { IsAdministrator = false, RestartSucceeds = true };
+        using var vm = CreateViewModel(profiles: profiles, engine: engine, emulation: emulation, dialogs: dialogs, shell: shell);
+        int restartRequests = 0;
+        vm.RestartRequested += (_, _) => restartRequests++;
+        await vm.InitializeAsync();
+        Assert.Equal(1, shell.RestartCount);
+        Assert.Equal(1, restartRequests);
+        Assert.False(emulation.IsEnabled);
+        Assert.Equal(0, engine.StartCount);
+    }
+
+    [Fact]
+    public void RestartFailureReportsErrorWithoutClosingAndDisablesImpulseTriggers()
+    {
+        var profiles = new FakeProfileSession();
+        var dialogs = new FakeDialogService { ConfirmRestart = true };
+        var shell = new FakeShellService { IsAdministrator = false, RestartException = new IOException("Cannot launch elevated process") };
+        using var vm = CreateViewModel(profiles: profiles, emulation: new FakeXboxEmulationService(), dialogs: dialogs, shell: shell);
+        int restartRequests = 0;
+        vm.RestartRequested += (_, _) => restartRequests++;
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        Assert.Equal(0, restartRequests);
+        Assert.Contains(dialogs.Errors, message => message.Contains("Cannot launch elevated process", StringComparison.Ordinal));
+        Assert.True(vm.CanChangeXboxBackend);
+    }
+
+    [Theory]
+    [InlineData(UnsavedChangesDecision.Save, 1, 0, 1)]
+    [InlineData(UnsavedChangesDecision.Discard, 0, 1, 1)]
+    [InlineData(UnsavedChangesDecision.Cancel, 0, 0, 0)]
+    public void RestartHonorsUnsavedProfileDecision(UnsavedChangesDecision decision, int saves, int reverts, int launches)
+    {
+        var profiles = new FakeProfileSession();
+        var dialogs = new FakeDialogService { ConfirmRestart = true, UnsavedDecision = decision };
+        var shell = new FakeShellService { IsAdministrator = false, RestartSucceeds = true };
+        using var vm = CreateViewModel(profiles: profiles, emulation: new FakeXboxEmulationService(), dialogs: dialogs, shell: shell);
+        var port = Assert.IsType<TextSettingFieldViewModel>(Field(vm.Settings, "Connection", nameof(AppConfig.Port)));
+        port.Text = "5400";
+        Assert.True(port.TryCommitText());
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.Equal(saves, profiles.SaveCount);
+        Assert.Equal(reverts, profiles.RevertCount);
+        Assert.Equal(launches, shell.RestartCount);
+        if (decision == UnsavedChangesDecision.Cancel)
+        {
+            Assert.True(vm.IsDirty);
+            Assert.False(vm.IsImpulseTriggersEnabled);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedBackendChangeRestoresCheckboxToActualBackend(bool throws)
+    {
+        var profiles = new FakeProfileSession();
+        var emulation = new FakeXboxEmulationService { RejectBackendChange = !throws, ThrowOnBackendChange = throws };
+        using var vm = CreateViewModel(profiles: profiles, emulation: emulation);
+        vm.IsImpulseTriggersEnabled = true;
+        Assert.False(vm.IsImpulseTriggersEnabled);
+        Assert.False(vm.IsHidMaestroSelected);
+        Assert.Equal(XboxBackend.ViGEm, profiles.XboxBackend);
+        Assert.Equal(XboxBackend.ViGEm, emulation.Backend);
     }
 
     [Fact]
@@ -690,11 +832,12 @@ public sealed class MainWindowViewModelTests
         FakeEngineFacade? engine = null,
         FakeDialogService? dialogs = null,
         FakeControllerService? controller = null,
-        IXboxEmulationService? emulation = null) => new(
+        IXboxEmulationService? emulation = null,
+        FakeShellService? shell = null) => new(
             profiles ?? new FakeProfileSession(),
             engine ?? new FakeEngineFacade(),
             dialogs ?? new FakeDialogService(),
-            new FakeShellService(),
+            shell ?? new FakeShellService(),
             new ImmediateDispatcher(),
             controller: controller, emulation: emulation);
 
@@ -815,7 +958,14 @@ public sealed class MainWindowViewModelTests
         public XboxBackend Backend { get; private set; }
         public XboxBackend BackendAtEnable { get; private set; }
         public int InstallCount { get; private set; }
-        public Task SetBackendAsync(XboxBackend backend) { Backend = backend; return Task.CompletedTask; }
+        public bool RejectBackendChange { get; init; }
+        public bool ThrowOnBackendChange { get; init; }
+        public Task SetBackendAsync(XboxBackend backend)
+        {
+            if (ThrowOnBackendChange) throw new IOException("Backend switch failed");
+            if (!RejectBackendChange) Backend = backend;
+            return Task.CompletedTask;
+        }
         public Task InstallHidMaestroAsync() { InstallCount++; return Task.CompletedTask; }
         public Task CheckAgainAsync() { Operations.Add("xbox:retry"); return Task.CompletedTask; }
         public bool ThrowOnPriority { get; set; }
@@ -833,6 +983,14 @@ public sealed class MainWindowViewModelTests
     {
         public List<string> Errors { get; } = new();
         public bool ConfirmInstall { get; set; }
+        public bool ConfirmRestart { get; set; }
+        public int RestartPromptCount { get; private set; }
+        public Task<bool>? RestartConfirmation { get; init; }
+        public Task<bool> ConfirmAdministratorRestartAsync(CancellationToken cancellationToken = default)
+        {
+            RestartPromptCount++;
+            return RestartConfirmation ?? Task.FromResult(ConfirmRestart);
+        }
         public Task<bool> ConfirmHidMaestroInstallationAsync(CancellationToken cancellationToken = default) => Task.FromResult(ConfirmInstall);
         public UnsavedChangesDecision UnsavedDecision { get; set; } = UnsavedChangesDecision.Save;
 
@@ -872,6 +1030,17 @@ public sealed class MainWindowViewModelTests
     }
     private sealed class FakeShellService : IPlatformShellService
     {
+        public bool IsAdministrator { get; init; } = true;
+        public bool RestartSucceeds { get; init; }
+        public Exception? RestartException { get; init; }
+        public int RestartCount { get; private set; }
+        public Task<bool> RestartAsAdministratorAsync()
+        {
+            RestartCount++;
+            return RestartException is not null
+                ? Task.FromException<bool>(RestartException)
+                : Task.FromResult(RestartSucceeds);
+        }
         public void OpenDirectory(string path) { }
         public void OpenUrl(string url) { }
     }

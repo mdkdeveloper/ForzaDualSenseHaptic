@@ -52,7 +52,9 @@ public sealed class App : Application
         try
         {
             Log.Info("ForzaHaptics — Forza Horizon 6 telemetry → DualSense haptics");
+            bool enableImpulseTriggers = ElevatedRestart.Prepare(desktop.Args ?? [], ElevatedRestart.IsAdministrator);
             ProfileStore store = ProfileStore.Open();
+            if (enableImpulseTriggers) store.XboxBackend = XboxBackend.HidMaestro;
             config = store.OpenActive(out string profile);
             session = new ProfileSession(store, config, profile);
             config = null; // Ownership moved to ProfileSession.
@@ -90,7 +92,7 @@ public sealed class App : Application
             Cleanup(config);
             desktop.MainWindow = new MessageDialog(
                 "ForzaHaptics — Error",
-                $"Failed to load settings:{Environment.NewLine}{exception.Message}",
+                $"Failed to start the application:{Environment.NewLine}{exception.Message}",
                 "Close");
         }
         finally

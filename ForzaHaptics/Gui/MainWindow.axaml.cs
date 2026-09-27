@@ -29,6 +29,13 @@ public partial class MainWindow : Window
         _viewModel = viewModel;
         DataContext = viewModel;
         viewModel.LogEntries.CollectionChanged += OnLogEntriesChanged;
+        viewModel.RestartRequested += OnRestartRequested;
+    }
+
+    private void OnRestartRequested(object? sender, EventArgs eventArgs)
+    {
+        _allowClose = true;
+        Close();
     }
 
     private async void OnOpened(object? sender, EventArgs eventArgs)
@@ -84,6 +91,7 @@ public partial class MainWindow : Window
         if (_viewModel is null)
             return;
         _viewModel.LogEntries.CollectionChanged -= OnLogEntriesChanged;
+        _viewModel.RestartRequested -= OnRestartRequested;
         _viewModel.Dispose();
         _viewModel = null;
     }

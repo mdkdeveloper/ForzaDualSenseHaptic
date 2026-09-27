@@ -5,9 +5,9 @@ namespace ForzaHaptics.Gui.Dialogs;
 
 internal enum MessageDialogResult
 {
+    Cancel,
     Primary,
     Secondary,
-    Cancel,
 }
 
 public partial class MessageDialog : Window

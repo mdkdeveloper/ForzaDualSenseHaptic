@@ -4,6 +4,8 @@ namespace ForzaHaptics.Gui.Services;
 
 public interface IPlatformShellService
 {
+    bool IsAdministrator { get; }
+    Task<bool> RestartAsAdministratorAsync();
     void OpenDirectory(string path);
     void OpenUrl(string url);
 }
@@ -11,6 +13,9 @@ public interface IPlatformShellService
 /// <summary>Current Windows implementation; replace this adapter when adding another desktop platform.</summary>
 public sealed class WindowsPlatformShellService : IPlatformShellService
 {
+    public bool IsAdministrator => ElevatedRestart.IsAdministrator;
+    public Task<bool> RestartAsAdministratorAsync() => ElevatedRestart.RestartAsync();
+
     public void OpenUrl(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)

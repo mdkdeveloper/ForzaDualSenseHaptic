@@ -96,10 +96,10 @@
                                   ToolTip.Tip="Applies to the next app launch, independently of telemetry and profiles." />
                     </WrapPanel>
                     <WrapPanel>
-                        <ComboBox x:Name="XboxBackendSelector" ItemsSource="{Binding XboxBackends}"
-                                  SelectedIndex="{Binding SelectedXboxBackendIndex, Mode=TwoWay}"
-                                  IsEnabled="{Binding CanChangeXboxBackend}" MinWidth="240" Margin="0,0,12,0"
-                                  ToolTip.Tip="Stop emulation before changing the virtual controller backend." />
+                        <CheckBox x:Name="ImpulseTriggersCheckBox" Content="Impulse Triggers"
+                                  IsChecked="{Binding IsImpulseTriggersEnabled, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanChangeXboxBackend}" Margin="0,0,12,0"
+                                  ToolTip.Tip="Enable Xbox impulse triggers with HIDMaestro. Requires administrator rights. Stop emulation before changing." />
                         <Button Content="Install / repair HIDMaestro" Command="{Binding InstallHidMaestroCommand}"
                                 IsVisible="{Binding IsHidMaestroSelected}" IsEnabled="{Binding CanChangeXboxBackend}" />
                     </WrapPanel>
