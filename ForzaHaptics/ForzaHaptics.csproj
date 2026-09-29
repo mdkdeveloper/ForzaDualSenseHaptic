@@ -40,6 +40,13 @@
     <Error Condition="'$(HidMaestroActualHash)' != 'D613BE086178D34DEF0C8D3869E801B55CE16D49B7A6E4516281D067AA730D9A'" Text="HIDMaestro SDK checksum mismatch. Restore official v1.9.0 SDK; see third_party/HIDMaestro/README.md." />
   </Target>
 
+  <Target Name="RemoveNativeDependencySymbolsFromPublish" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)"
+                             Condition="'%(ResolvedFileToPublish.AssetType)' == 'native' and '%(ResolvedFileToPublish.Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <!-- Seed is embedded so build/publish never overwrite an edited runtime profile. -->
     <EmbeddedResource Include="Configs/profile_1.json" LogicalName="ForzaHaptics.Configs.profile_1.json" />
